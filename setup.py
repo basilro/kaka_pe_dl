@@ -18,6 +18,14 @@ setting = {
 
 from plugin import *
 
+# 일부 환경에서 SQLALCHEMY_BINDS가 None인 채로 첫 플러그인이 로드될 때 init이 실패할 수 있어 안전망
+try:
+    from framework import F as _F
+    if _F.app.config.get('SQLALCHEMY_BINDS') is None:
+        _F.app.config['SQLALCHEMY_BINDS'] = {}
+except Exception:
+    pass
+
 P = create_plugin_instance(setting)
 
 try:
