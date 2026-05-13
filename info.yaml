@@ -1,6 +1,6 @@
-title: "kakaopage_dl"
+title: "kaka_pe_dl"
 version: "0.1.0"
-package_name: "kakaopage_dl"
+package_name: "kaka_pe_dl"
 developer: "basilro"
 description: "카카오페이지 기다무 자동 다운로드"
 home: "https://github.com/basilro/kaka-pe-dl"
