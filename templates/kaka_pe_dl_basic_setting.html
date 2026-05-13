@@ -20,7 +20,7 @@
             value=arg['titles'], desc=['여러 개는 | 로 구분. 정확한 카카오페이지 표기 제목 사용.', '예: 늙은 죄수는 고독에 산다|좀비물 민폐 악녀가 된 K직장인']) }}
 
         {{ macros.setting_input_textarea('cookies_json', '카카오 쿠키 (Cookie-Editor JSON)',
-            value=arg['cookies_json'], rows='6',
+            value=arg['cookies_json'], row='6',
             desc=['Chrome 확장 Cookie-Editor 등으로 page.kakao.com 쿠키를 JSON으로 export 후 그대로 붙여넣기',
                   '필수 쿠키: _kau, _kpwtkn, _T_ANO, _karmt, _kahai, _kawlt, _kpdid',
                   '쿠키 만료 시 다시 export해서 주입 (보통 약 30일 유지)']) }}
