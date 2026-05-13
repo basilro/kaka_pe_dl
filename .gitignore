@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PoC/탐색 산출물 (실수로 다시 생기면 커밋 방지)
+_poc/
+_dump_*/
+_session/
+*.har
+cookies*.json
+browser_cookies.json
+
+# 개인 설정 / 캐시
+config.local.*
+*.local
+
+# 로그
+*.log
