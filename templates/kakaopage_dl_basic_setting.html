@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div>
+  {{ macros.m_button_group([['globalSettingSaveBtn', '설정 저장'],
+                            ['globalImmediatelyExecuteBtn', '즉시 실행'],
+                            ['verifyCookiesBtn', '쿠키 검증']]) }}
+  {{ macros.m_row_start('5') }}
+  {{ macros.m_row_end() }}
+  <nav>
+    {{ macros.m_tab_head_start() }}
+      {{ macros.m_tab_head('normal', '일반', true) }}
+      {{ macros.m_tab_head('auto', '자동', false) }}
+    {{ macros.m_tab_head_end() }}
+  </nav>
+  <form id='setting' name='setting'>
+    <div class="tab-content" id="nav-tabContent">
+      {{ macros.m_tab_content_start('normal', true) }}
+        {{ macros.setting_input_text('titles', '체크할 작품 제목',
+            value=arg['titles'], desc=['여러 개는 | 로 구분. 정확한 카카오페이지 표기 제목 사용.', '예: 늙은 죄수는 고독에 산다|좀비물 민폐 악녀가 된 K직장인']) }}
+
+        {{ macros.setting_input_textarea('cookies_json', '카카오 쿠키 (Cookie-Editor JSON)',
+            value=arg['cookies_json'], rows='6',
+            desc=['Chrome 확장 Cookie-Editor 등으로 page.kakao.com 쿠키를 JSON으로 export 후 그대로 붙여넣기',
+                  '필수 쿠키: _kau, _kpwtkn, _T_ANO, _karmt, _kahai, _kawlt, _kpdid',
+                  '쿠키 만료 시 다시 export해서 주입 (보통 약 30일 유지)']) }}
+
+        {{ macros.setting_input_text_and_buttons('download_path', '다운로드 경로',
+            [['select_download_path_btn', '경로 선택']],
+            value=arg['download_path'],
+            desc=['{다운로드경로}/{작품제목}/{NNNN_회차제목}/{001.jpg ...} 형태로 저장됨']) }}
+
+        {{ macros.setting_input_text('max_per_run', '1회 실행 최대 다운로드 화수',
+            value=arg['max_per_run'],
+            desc=['스케줄 한 번에 최대 N화까지. 기다무 1장이면 보통 1.']) }}
+
+        {{ macros.setting_checkbox('use_waitfree_only', '기다무 대여권만 사용',
+            value=arg['use_waitfree_only'],
+            desc='On: 기다무가 충전된 작품만 다운로드 (보유 이용권/캐시 안 씀)') }}
+
+        {{ macros.setting_buttons([['globalDbDeleteBtn', '이력 초기화']], 'DB 정리') }}
+      {{ macros.m_tab_content_end() }}
+
+      {{ macros.m_tab_content_start('auto', false) }}
+        {{ macros.global_setting_scheduler_button(arg['is_include'], arg['is_running']) }}
+        {{ macros.setting_input_text('basic_interval', '스케쥴링 실행 정보',
+            value=arg['basic_interval'], col='3',
+            desc=['Interval(minute) 또는 Cron. 예: 180 또는 0 */3 * * *']) }}
+        {{ macros.setting_checkbox('basic_auto_start', '시작시 자동실행',
+            value=arg['basic_auto_start'], desc='On: 시작시 스케쥴러 자동 등록') }}
+      {{ macros.m_tab_content_end() }}
+    </div>
+  </form>
+</div>
+
+<script type="text/javascript">
+var package_name = "{{ arg['package_name'] }}";
+
+$(document).ready(function(){});
+
+$('body').on('click', '#select_download_path_btn', function(e){
+  e.preventDefault();
+  var path = $('#download_path').val().trim() || '/';
+  globalSelectLocalFolder('다운로드 폴더', path, function(result){
+    $('#download_path').val(result);
+  });
+});
+
+$('body').on('click', '#verifyCookiesBtn', function(e){
+  e.preventDefault();
+  $.post('/' + package_name + '/ajax/basic/verify_cookies', {}, function(data){
+    if(data.ret === 'success'){ $.notify(data.msg || '쿠키 유효', {className: 'success'}); }
+    else { $.notify(data.msg || '쿠키 검증 실패', {className: 'error'}); }
+  });
+});
+</script>
+{% endblock %}
