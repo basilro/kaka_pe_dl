@@ -86,7 +86,9 @@ try:
     for inst in (getattr(P, 'module_list', None) or []):
         meth = sorted([n for n in dir(inst)
                        if n.startswith('process_') or n in ('name', 'first_menu')])
-        P.logger.info('INSTANCE type=%s name=%r methods=%s',
-                      type(inst).__name__, getattr(inst, 'name', '?'), meth)
+        is_cls = isinstance(inst, type)
+        P.logger.info('INSTANCE is_class=%s type=%s id=%s name=%r methods=%s',
+                      is_cls, type(inst).__name__, id(inst),
+                      getattr(inst, 'name', '?'), meth)
 except Exception as e:
     P.logger.error('instance inspect 실패: %s', e)
