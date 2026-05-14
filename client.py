@@ -136,22 +136,34 @@ class KakaopageClient:
                 return it
         return None
 
-    def get_episodes_all(self, series_id: int, window_size: int = 30) -> List[Dict]:
+    def get_episodes_all(self, series_id: int, window_size: int = 20) -> List[Dict]:
         """회차 전체 (페이지네이션 합쳐서). last_view/purchase_info 보존."""
         all_items = []
-        cursor = 0
+        cursor = None
         seen_pid = set()
-        while True:
+        for page_no in range(100):  # 최대 100페이지 안전장치
             s = self._session(referer=f'{PAGE}/content/{series_id}')
+            params = {'series_id': series_id, 'cursor_direction': 'AFTER',
+                      'window_size': window_size}
+            if cursor is not None:
+                params['cursor_index'] = cursor
             r = s.get(f'{BFF}/api/gateway/api/v2/content/product/list',
-                      params={'series_id': series_id, 'cursor_index': cursor,
-                              'cursor_direction': 'AFTER', 'window_size': window_size},
-                      timeout=15)
-            body = self._check(self._json(r))
+                      params=params, timeout=15)
+            try:
+                body = self._check(self._json(r))
+            except KakaopageError as e:
+                # 이미 한 페이지 이상 받았으면 부분 성공으로 진행
+                if all_items:
+                    self._log('warning',
+                              'get_episodes_all page=%d 중단, 누적 %d개로 진행: %s',
+                              page_no, len(all_items), e)
+                    break
+                raise
             res = body.get('result', {})
             lst = res.get('list') or []
             if not lst:
                 break
+            new_count = 0
             for x in lst:
                 it = x['item']
                 pid = it.get('product_id')
@@ -159,11 +171,17 @@ class KakaopageClient:
                     continue
                 seen_pid.add(pid)
                 all_items.append(x)
+                new_count += 1
+            if new_count == 0:
+                break  # 진전 없음
             if not res.get('has_next'):
                 break
-            cursor = lst[-1].get('cursor_index', cursor) + 1
-            if len(all_items) > res.get('total_count', 0) * 2:
-                break  # 안전장치
+            # 카카오는 마지막 item의 cursor_index 를 다음 호출 cursor 로 그대로 사용
+            next_cursor = lst[-1].get('cursor_index')
+            if next_cursor is None or next_cursor == cursor:
+                break
+            cursor = next_cursor
+            time.sleep(0.3)  # rate limit 회피
         return all_items
 
     @staticmethod
