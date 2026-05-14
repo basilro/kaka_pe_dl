@@ -99,10 +99,15 @@ class KakaopageClient:
     def _check(self, body: Dict[str, Any]) -> Dict[str, Any]:
         rc = body.get('result_code', 0)
         if rc == -100:
+            self._log('error', 'kakao auth fail body: %s',
+                      json.dumps(body, ensure_ascii=False)[:1500])
             raise AuthRequiredError(body.get('message') or '권한 인증 실패')
         if rc == -200 and 'not_purchased' in (body.get('message_key') or ''):
             raise NotPurchasedError(body.get('message') or '미구매')
         if rc != 0:
+            # 실패 응답 전체를 덤프 — message_key/message 외 추가 단서가 있는 경우 확인용
+            self._log('error', 'kakao api fail rc=%s body: %s',
+                      rc, json.dumps(body, ensure_ascii=False)[:1500])
             raise KakaopageError(f'{body.get("message_key")}: {body.get("message")}')
         return body
 
@@ -147,8 +152,11 @@ class KakaopageClient:
                       'window_size': window_size}
             if cursor is not None:
                 params['cursor_index'] = cursor
-            r = s.get(f'{BFF}/api/gateway/api/v2/content/product/list',
-                      params=params, timeout=15)
+            url = f'{BFF}/api/gateway/api/v2/content/product/list'
+            self._log('info', 'product/list page=%d params=%s', page_no, params)
+            r = s.get(url, params=params, timeout=15)
+            self._log('info', 'product/list resp status=%d ct=%s body[:300]=%s',
+                      r.status_code, r.headers.get('content-type', '?'), r.text[:300])
             try:
                 body = self._check(self._json(r))
             except KakaopageError as e:
