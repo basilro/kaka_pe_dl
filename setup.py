@@ -7,9 +7,10 @@ setting = {
         'uri': __package__,
         'name': '카카오페이지 다운',
         'list': [
-            {'uri': 'basic/setting', 'name': '설정'},
-            {'uri': 'basic/list',    'name': '다운로드 이력'},
-            {'uri': 'log',           'name': '로그'},
+            {'uri': 'basic/setting',  'name': '설정'},
+            {'uri': 'manual/setting', 'name': '수동 다운로드'},
+            {'uri': 'basic/list',     'name': '다운로드 이력'},
+            {'uri': 'log',            'name': '로그'},
         ],
     },
     'setting_menu': None,
@@ -22,7 +23,8 @@ P = create_plugin_instance(setting)
 
 try:
     from .mod_basic import ModuleBasic
-    P.set_module_list([ModuleBasic])
+    from .mod_manual import ModuleManual
+    P.set_module_list([ModuleBasic, ModuleManual])
 except Exception as e:
     import traceback
     P.logger.error(f'Exception:{str(e)}')
