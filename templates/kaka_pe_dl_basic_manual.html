@@ -102,7 +102,9 @@ function applyState(st){
 }
 
 function pollProgress(){
-  $.post('/' + package_name + '/ajax/basic/mprogress', {}, function(data){
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'mprogress'},
+         function(data){
     if (data && data.ret === 'success') applyState(data.state);
   });
 }
@@ -116,8 +118,8 @@ $('body').on('click', '#manualRunBtn', function(e){
   var url = ($('#manual_url').val() || '').trim();
   if (!url) { $.notify('URL을 입력하세요', {className: 'warn'}); return; }
   $.notify('분석 + 다운로드 시작...', {className: 'info'});
-  $.post('/' + package_name + '/ajax/basic/mrun',
-         {arg1: url, url: url},
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'mrun', arg1: url, url: url},
          function(data){
     if (data && data.ret === 'success'){
       $.notify('작품: ' + (data.series_title || '?')
@@ -134,7 +136,9 @@ $('body').on('click', '#manualRunBtn', function(e){
 
 $('body').on('click', '#manualCancelBtn', function(e){
   e.preventDefault();
-  $.post('/' + package_name + '/ajax/basic/mcancel', {}, function(data){
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'mcancel'},
+         function(data){
     $.notify('취소 요청', {className: 'info'});
     pollProgress();
   });

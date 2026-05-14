@@ -68,7 +68,9 @@ $('body').on('click', '#select_download_path_btn', function(e){
 
 $('body').on('click', '#verifyCookiesBtn', function(e){
   e.preventDefault();
-  $.post('/' + package_name + '/ajax/basic/verify_cookies', {}, function(data){
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'verify_cookies'},
+         function(data){
     if(data.ret === 'success'){ $.notify(data.msg || '쿠키 유효', {className: 'success'}); }
     else { $.notify(data.msg || '쿠키 검증 실패', {className: 'error'}); }
   });
