@@ -65,3 +65,28 @@ try:
                 P.logger.info('P.%s 검사 실패: %s', attr, ee)
 except Exception as e:
     P.logger.error('module attr 진단 실패: %s', e)
+
+# ★ 진단: 실제로 로드된 ModuleManual 클래스/인스턴스의 정체 (코드 캐시/버전 확인)
+try:
+    import sys as _sys
+    for m_cls in modules:
+        mod_obj = _sys.modules.get(m_cls.__module__)
+        P.logger.info(
+            'CLASS %s | module=%s | file=%s | init_line=%s',
+            m_cls.__name__,
+            m_cls.__module__,
+            getattr(mod_obj, '__file__', '?'),
+            (m_cls.__init__.__code__.co_firstlineno
+             if hasattr(m_cls.__init__, '__code__') else '?'),
+        )
+except Exception as e:
+    P.logger.error('class inspect 실패: %s', e)
+
+try:
+    for inst in (getattr(P, 'module_list', None) or []):
+        meth = sorted([n for n in dir(inst)
+                       if n.startswith('process_') or n in ('name', 'first_menu')])
+        P.logger.info('INSTANCE type=%s name=%r methods=%s',
+                      type(inst).__name__, getattr(inst, 'name', '?'), meth)
+except Exception as e:
+    P.logger.error('instance inspect 실패: %s', e)
