@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div>
+  {{ macros.setting_input_text_and_buttons('manual_url', '카카오페이지 작품 URL',
+      [['manualAnalyzeBtn', '분석'],
+       ['manualStartBtn',   '전체 다운로드 시작'],
+       ['manualCancelBtn',  '취소']],
+      value='',
+      desc=['예) https://page.kakao.com/content/67479044 (viewer URL 도 가능)',
+            '분석 → 회차 목록 확인 → 전체 다운로드 시작. 보유/무료 회차만 받고 잠금은 자동 스킵.']) }}
+
+  <div class="container-fluid" style="margin-top:10px;">
+    <div class="row" style="padding:6px 0;">
+      <div class="col-md-3"><strong>상태:</strong> <span id="m_status">-</span></div>
+      <div class="col-md-9"><span id="m_message" style="color:#666;"></span></div>
+    </div>
+    <div class="row" style="padding:6px 0;">
+      <div class="col-md-3"><strong>작품:</strong> <span id="m_series">-</span></div>
+      <div class="col-md-9">
+        <strong>진행:</strong> <span id="m_done">0</span> / <span id="m_total">0</span>
+        (완료 <span id="m_completed">0</span>, 스킵 <span id="m_skipped">0</span>, 실패 <span id="m_failed">0</span>)
+        <div class="progress" style="height:14px; margin-top:4px;">
+          <div id="m_progress_bar" class="progress-bar progress-bar-striped" role="progressbar"
+               style="width:0%;">0%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {{ macros.m_hr_head_top() }}
+  {{ macros.m_row_start('0') }}
+  <div class="col-sm-1" style="text-align:center;"><strong>#</strong></div>
+  <div class="col-sm-5"><strong>회차</strong></div>
+  <div class="col-sm-2" style="text-align:center;"><strong>보유</strong></div>
+  <div class="col-sm-2" style="text-align:center;"><strong>진행</strong></div>
+  <div class="col-sm-2" style="text-align:center;"><strong>상태</strong></div>
+  {{ macros.m_row_end() }}
+  {{ macros.m_hr_head_bottom() }}
+  <div id="m_episodes"></div>
+</div>
+
+<script type="text/javascript">
+var package_name = "{{ arg['package_name'] }}";
+var pollTimer = null;
+
+function availBadge(a){
+  var m = {'free':['success','무료'],'owned':['primary','소장'],'rented':['info','대여'],
+           'locked':['secondary','잠금'],'unknown':['light','-']};
+  var v = m[a] || ['light', a || '-'];
+  return '<span class="badge badge-' + v[0] + '">' + v[1] + '</span>';
+}
+function stateBadge(s){
+  var m = {'pending':['light','대기'],'downloading':['info','다운중'],
+           'completed':['success','완료'],'skipped':['secondary','스킵'],
+           'failed':['danger','실패']};
+  var v = m[s] || ['light', s || '-'];
+  return '<span class="badge badge-' + v[0] + '">' + v[1] + '</span>';
+}
+
+function renderEpisodes(eps, currentIdx){
+  var html = '';
+  for (var i = 0; i < eps.length; i++){
+    var e = eps[i];
+    var pages = (e.pages_total ? (e.pages_done + '/' + e.pages_total) : '-');
+    var rowStyle = (i === currentIdx) ? ' style="background:#fff3cd;"' : '';
+    html += '<div class="row"' + rowStyle + ' style="padding:3px 0; border-bottom:1px solid #eee;">';
+    html += '<div class="col-sm-1" style="text-align:center;">' + (e.episode_no || '-') + '</div>';
+    html += '<div class="col-sm-5" style="word-break:break-all;"><small>' + (e.title || '-') + '</small></div>';
+    html += '<div class="col-sm-2" style="text-align:center;">' + availBadge(e.availability) + '</div>';
+    html += '<div class="col-sm-2" style="text-align:center;">' + pages + '</div>';
+    html += '<div class="col-sm-2" style="text-align:center;">' + stateBadge(e.state)
+         + (e.error ? '<br/><small style="color:#c00;">' + e.error + '</small>' : '') + '</div>';
+    html += '</div>';
+  }
+  document.getElementById('m_episodes').innerHTML = html;
+}
+
+function applyState(st){
+  document.getElementById('m_status').innerText = st.status || '-';
+  document.getElementById('m_message').innerText = st.message || '';
+  document.getElementById('m_series').innerText = st.series_title || '-';
+  var total = st.total_to_download || 0;
+  var done = (st.completed || 0) + (st.skipped || 0) + (st.failed || 0);
+  document.getElementById('m_total').innerText = total;
+  document.getElementById('m_done').innerText = done;
+  document.getElementById('m_completed').innerText = st.completed || 0;
+  document.getElementById('m_skipped').innerText = st.skipped || 0;
+  document.getElementById('m_failed').innerText = st.failed || 0;
+  var pct = total > 0 ? Math.floor(done * 100 / Math.max(total, 1)) : 0;
+  var bar = document.getElementById('m_progress_bar');
+  bar.style.width = pct + '%';
+  bar.innerText = pct + '%';
+  if (st.status === 'running') bar.classList.add('progress-bar-animated');
+  else bar.classList.remove('progress-bar-animated');
+  renderEpisodes(st.episodes || [], st.current_index);
+
+  if (st.status === 'running' || st.status === 'analyzing') {
+    if (!pollTimer) pollTimer = setInterval(pollProgress, 1500);
+  } else {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+}
+
+function pollProgress(){
+  $.post('/' + package_name + '/ajax/manual/progress', {}, function(data){
+    if (data && data.ret === 'success') applyState(data.state);
+  });
+}
+
+$(document).ready(function(){
+  pollProgress();
+});
+
+$('body').on('click', '#manualAnalyzeBtn', function(e){
+  e.preventDefault();
+  var url = ($('#manual_url').val() || '').trim();
+  if (!url) { $.notify('URL을 입력하세요', {className: 'warn'}); return; }
+  $.notify('분석 중...', {className: 'info'});
+  $.post('/' + package_name + '/ajax/manual/analyze', {arg1: url, url: url}, function(data){
+    if (data && data.ret === 'success'){
+      $.notify('분석 완료 — 다운로드 가능 ' + data.will_download + '/' + data.total, {className: 'success'});
+      pollProgress();
+    } else {
+      $.notify((data && data.msg) || '분석 실패', {className: 'error'});
+    }
+  });
+});
+
+$('body').on('click', '#manualStartBtn', function(e){
+  e.preventDefault();
+  $.post('/' + package_name + '/ajax/manual/start', {}, function(data){
+    if (data && data.ret === 'success'){
+      $.notify('다운로드 시작', {className: 'success'});
+      pollProgress();
+    } else {
+      $.notify((data && data.msg) || '시작 실패', {className: 'error'});
+    }
+  });
+});
+
+$('body').on('click', '#manualCancelBtn', function(e){
+  e.preventDefault();
+  $.post('/' + package_name + '/ajax/manual/cancel', {}, function(data){
+    $.notify('취소 요청', {className: 'info'});
+    pollProgress();
+  });
+});
+</script>
+{% endblock %}
