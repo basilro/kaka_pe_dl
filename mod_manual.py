@@ -11,14 +11,27 @@ class ModuleManual(PluginModuleBase):
             P, name='manual', first_menu='setting',
             scheduler_desc='카카오페이지 수동 다운로드',
         )
+        # PluginModuleBase가 참조할 수 있는 기본값 명시
+        self.db_default = {
+            f'{self.name}_db_version': '1',
+        }
+        self.web_list_model = None
 
     def scheduler_function(self):
         # 수동 다운로드 모듈은 스케줄러 사용 안 함
         pass
 
     def process_menu(self, sub, req):
+        logger.debug('manual.process_menu IN sub=%r', sub)
+        if not sub:
+            sub = 'setting'
         arg = P.ModelSetting.to_dict()
-        return render_template(f'{P.package_name}_{self.name}_{sub}.html', arg=arg)
+        try:
+            return render_template(f'{P.package_name}_{self.name}_{sub}.html', arg=arg)
+        except Exception as e:
+            logger.error('manual render_template 실패 sub=%r: %s', sub, e)
+            logger.error(traceback.format_exc())
+            return f'manual render failed: {e}'
 
     def process_command(self, command, arg1, arg2, arg3, req):
         ret = {'ret': 'success'}

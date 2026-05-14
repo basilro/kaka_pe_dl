@@ -21,11 +21,28 @@ from plugin import *
 
 P = create_plugin_instance(setting)
 
+import traceback as _tb
+
+modules = []
 try:
     from .mod_basic import ModuleBasic
-    from .mod_manual import ModuleManual
-    P.set_module_list([ModuleBasic, ModuleManual])
+    modules.append(ModuleBasic)
+    P.logger.info('ModuleBasic import OK')
 except Exception as e:
-    import traceback
-    P.logger.error(f'Exception:{str(e)}')
-    P.logger.error(traceback.format_exc())
+    P.logger.error('ModuleBasic import 실패: %s', e)
+    P.logger.error(_tb.format_exc())
+
+try:
+    from .mod_manual import ModuleManual
+    modules.append(ModuleManual)
+    P.logger.info('ModuleManual import OK')
+except Exception as e:
+    P.logger.error('ModuleManual import 실패: %s', e)
+    P.logger.error(_tb.format_exc())
+
+try:
+    P.set_module_list(modules)
+    P.logger.info('plugin set_module_list 완료: %s', [m.__name__ for m in modules])
+except Exception as e:
+    P.logger.error('set_module_list 실패: %s', e)
+    P.logger.error(_tb.format_exc())
