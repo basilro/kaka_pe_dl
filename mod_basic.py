@@ -52,6 +52,23 @@ class ModuleBasic(PluginModuleBase):
                     ret = {'ret': 'fail', 'msg': str(e)}
             elif command == 'run_now':
                 ret = self.do_action()
+            # ---- 수동 다운로드 (별도 모듈 라우팅 우회 — mod_basic 안에 통합) ----
+            elif command == 'manual_analyze':
+                from . import manual_worker
+                url = (arg1 or '').strip()
+                if not url and req is not None:
+                    url = (req.form.get('url') or req.values.get('url') or '').strip()
+                ret = manual_worker.analyze(url)
+            elif command == 'manual_start':
+                from . import manual_worker
+                ret = manual_worker.start()
+            elif command == 'manual_cancel':
+                from . import manual_worker
+                manual_worker.cancel()
+                ret = {'ret': 'success', 'msg': '취소 요청 보냄'}
+            elif command == 'manual_progress':
+                from . import manual_worker
+                ret = {'ret': 'success', 'state': manual_worker.get_state()}
         except Exception as e:
             logger.error('Exception: %s', e)
             logger.error(traceback.format_exc())

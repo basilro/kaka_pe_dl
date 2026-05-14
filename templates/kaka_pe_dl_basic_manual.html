@@ -103,7 +103,7 @@ function applyState(st){
 }
 
 function pollProgress(){
-  $.post('/' + package_name + '/ajax/manual/progress', {}, function(data){
+  $.post('/' + package_name + '/ajax/basic/manual_progress', {}, function(data){
     if (data && data.ret === 'success') applyState(data.state);
   });
 }
@@ -117,7 +117,7 @@ $('body').on('click', '#manualAnalyzeBtn', function(e){
   var url = ($('#manual_url').val() || '').trim();
   if (!url) { $.notify('URL을 입력하세요', {className: 'warn'}); return; }
   $.notify('분석 중...', {className: 'info'});
-  $.post('/' + package_name + '/ajax/manual/analyze', {arg1: url, url: url}, function(data){
+  $.post('/' + package_name + '/ajax/basic/manual_analyze', {arg1: url, url: url}, function(data){
     if (data && data.ret === 'success'){
       $.notify('분석 완료 — 다운로드 가능 ' + data.will_download + '/' + data.total, {className: 'success'});
       pollProgress();
@@ -129,7 +129,7 @@ $('body').on('click', '#manualAnalyzeBtn', function(e){
 
 $('body').on('click', '#manualStartBtn', function(e){
   e.preventDefault();
-  $.post('/' + package_name + '/ajax/manual/start', {}, function(data){
+  $.post('/' + package_name + '/ajax/basic/manual_start', {}, function(data){
     if (data && data.ret === 'success'){
       $.notify('다운로드 시작', {className: 'success'});
       pollProgress();
@@ -141,7 +141,7 @@ $('body').on('click', '#manualStartBtn', function(e){
 
 $('body').on('click', '#manualCancelBtn', function(e){
   e.preventDefault();
-  $.post('/' + package_name + '/ajax/manual/cancel', {}, function(data){
+  $.post('/' + package_name + '/ajax/basic/manual_cancel', {}, function(data){
     $.notify('취소 요청', {className: 'info'});
     pollProgress();
   });
