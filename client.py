@@ -141,54 +141,105 @@ class KakaopageClient:
                 return it
         return None
 
-    def get_episodes_all(self, series_id: int, window_size: int = 20) -> List[Dict]:
-        """회차 전체 (페이지네이션 합쳐서). last_view/purchase_info 보존."""
-        all_items = []
-        cursor = 0   # 카카오 BFF는 첫 호출에도 cursor_index=0 필수
+    def _fetch_product_list(self, series_id: int, cursor_index: int,
+                            cursor_direction: str, window_size: int,
+                            sort_type: Optional[str] = None,
+                            phase: str = '?') -> Dict:
+        s = self._session(referer=f'{PAGE}/')
+        params = {'series_id': series_id, 'cursor_index': cursor_index,
+                  'cursor_direction': cursor_direction, 'window_size': window_size}
+        if sort_type:
+            params['sort_type'] = sort_type
+        url = f'{BFF}/api/gateway/api/v2/content/product/list'
+        self._log('info', 'product/list[%s] params=%s', phase, params)
+        r = s.get(url, params=params, timeout=15)
+        self._log('info', 'product/list[%s] status=%d body[:200]=%s',
+                  phase, r.status_code, r.text[:200])
+        return self._check(self._json(r))
+
+    def get_episodes_all(self, series_id: int, window_size: int = 25) -> List[Dict]:
+        """회차 전체 수집.
+
+        카카오 BFF v2 패턴 (브라우저 트래픽 분석 결과):
+          1) ANCHOR cursor_index=0 → last_view 주변 일부 반환
+          2) PREV  (lst[0].cursor_index 기준 위쪽, 더 최신 회차)
+          3) NEXT  (lst[-1].cursor_index 기준 아래쪽, 더 오래된 회차/트레일러)
+
+        cursor_direction 가 'AFTER' 등은 거부됨 → 위 3가지만 허용.
+        sort_type='desc' 가 PREV/NEXT 에 필요.
+        """
+        all_items: List[Dict] = []
         seen_pid = set()
-        for page_no in range(100):  # 최대 100페이지 안전장치
-            s = self._session(referer=f'{PAGE}/content/{series_id}')
-            params = {'series_id': series_id, 'cursor_index': cursor,
-                      'cursor_direction': 'AFTER', 'window_size': window_size}
-            url = f'{BFF}/api/gateway/api/v2/content/product/list'
-            self._log('info', 'product/list page=%d params=%s', page_no, params)
-            r = s.get(url, params=params, timeout=15)
-            self._log('info', 'product/list resp status=%d ct=%s body[:300]=%s',
-                      r.status_code, r.headers.get('content-type', '?'), r.text[:300])
-            try:
-                body = self._check(self._json(r))
-            except KakaopageError as e:
-                # 이미 한 페이지 이상 받았으면 부분 성공으로 진행
-                if all_items:
-                    self._log('warning',
-                              'get_episodes_all page=%d 중단, 누적 %d개로 진행: %s',
-                              page_no, len(all_items), e)
-                    break
-                raise
-            res = body.get('result', {})
-            lst = res.get('list') or []
-            if not lst:
-                break
-            new_count = 0
+
+        def absorb(lst):
+            new = 0
             for x in lst:
-                it = x['item']
+                it = x.get('item') or {}
                 pid = it.get('product_id')
-                if pid in seen_pid:
+                if pid is None or pid in seen_pid:
                     continue
                 seen_pid.add(pid)
                 all_items.append(x)
-                new_count += 1
-            if new_count == 0:
-                break  # 진전 없음
-            if not res.get('has_next'):
+                new += 1
+            return new
+
+        # 1) ANCHOR
+        try:
+            body = self._fetch_product_list(series_id, 0, 'ANCHOR', 6, phase='anchor')
+        except KakaopageError:
+            raise
+        res = body.get('result', {})
+        lst = res.get('list') or []
+        absorb(lst)
+        anchor_first = lst[0].get('cursor_index') if lst else 0
+        anchor_last = lst[-1].get('cursor_index') if lst else 0
+        has_prev = bool(res.get('has_prev'))
+        has_next = bool(res.get('has_next'))
+
+        # 2) PREV (최신 방향)
+        cur = anchor_first
+        for _ in range(50):
+            if not has_prev:
                 break
-            # 카카오는 마지막 item의 cursor_index 를 다음 호출 cursor 로 그대로 사용
-            next_cursor = lst[-1].get('cursor_index')
-            if next_cursor is None or next_cursor == cursor:
-                # 진전 없으면 +1 시도 (오래된 API 호환)
-                next_cursor = cursor + 1
-            cursor = next_cursor
-            time.sleep(0.3)  # rate limit 회피
+            try:
+                body = self._fetch_product_list(series_id, cur, 'PREV', window_size,
+                                                sort_type='desc', phase='prev')
+            except KakaopageError as e:
+                self._log('warning', 'PREV 중단 누적%d: %s', len(all_items), e)
+                break
+            res = body.get('result', {})
+            lst = res.get('list') or []
+            if not lst or absorb(lst) == 0:
+                break
+            has_prev = bool(res.get('has_prev'))
+            new_cur = lst[0].get('cursor_index')
+            if new_cur is None or new_cur >= cur:
+                break
+            cur = new_cur
+            time.sleep(0.3)
+
+        # 3) NEXT (오래된 방향)
+        cur = anchor_last
+        for _ in range(50):
+            if not has_next:
+                break
+            try:
+                body = self._fetch_product_list(series_id, cur, 'NEXT', window_size,
+                                                sort_type='desc', phase='next')
+            except KakaopageError as e:
+                self._log('warning', 'NEXT 중단 누적%d: %s', len(all_items), e)
+                break
+            res = body.get('result', {})
+            lst = res.get('list') or []
+            if not lst or absorb(lst) == 0:
+                break
+            has_next = bool(res.get('has_next'))
+            new_cur = lst[-1].get('cursor_index')
+            if new_cur is None or new_cur <= cur:
+                break
+            cur = new_cur
+            time.sleep(0.3)
+
         return all_items
 
     @staticmethod
