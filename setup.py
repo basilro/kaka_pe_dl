@@ -46,3 +46,22 @@ try:
 except Exception as e:
     P.logger.error('set_module_list 실패: %s', e)
     P.logger.error(_tb.format_exc())
+
+# 진단: P에 어떤 식으로 모듈이 보관되는지 (라우터 매칭 키 확인용)
+try:
+    for attr in ('module_list', 'modules', 'module_map', '_module_list', '_modules'):
+        if hasattr(P, attr):
+            val = getattr(P, attr)
+            try:
+                if isinstance(val, dict):
+                    keys = list(val.keys())
+                    P.logger.info('P.%s (dict) keys=%s', attr, keys)
+                elif isinstance(val, (list, tuple)):
+                    names = [getattr(m, 'name', type(m).__name__) for m in val]
+                    P.logger.info('P.%s (list) names=%s', attr, names)
+                else:
+                    P.logger.info('P.%s type=%s value=%r', attr, type(val).__name__, val)
+            except Exception as ee:
+                P.logger.info('P.%s 검사 실패: %s', attr, ee)
+except Exception as e:
+    P.logger.error('module attr 진단 실패: %s', e)
