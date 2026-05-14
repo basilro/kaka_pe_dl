@@ -167,6 +167,61 @@ class KakaopageClient:
         return all_items
 
     @staticmethod
+    def extract_series_id(url_or_id: str) -> Optional[int]:
+        """카카오페이지 작품/뷰어 URL 또는 숫자에서 series_id 추출.
+
+        지원 형태:
+          - https://page.kakao.com/content/{series_id}
+          - https://page.kakao.com/content/{series_id}/viewer/{product_id}
+          - https://m.page.kakao.com/...?seriesid=12345
+          - kakaopage://...?series_id=12345
+          - 숫자 그 자체 ('67479044')
+        """
+        s = (url_or_id or '').strip()
+        if not s:
+            return None
+        if s.isdigit():
+            return int(s)
+        m = re.search(r'/content/(\d+)', s)
+        if m:
+            return int(m.group(1))
+        m = re.search(r'[?&](?:series_id|seriesid)=(\d+)', s, re.I)
+        if m:
+            return int(m.group(1))
+        m = re.search(r'(\d{6,})', s)
+        if m:
+            return int(m.group(1))
+        return None
+
+    @staticmethod
+    def episode_availability(item: Dict) -> str:
+        """회차 메타에서 보유/무료/잠금 추정.
+
+        returns: 'owned' | 'rented' | 'free' | 'locked' | 'unknown'
+        """
+        sp = item.get('service_property') or {}
+        pi = sp.get('purchase_info') or {}
+        pt = (pi.get('purchase_type') or '').lower()
+        if pt == 'own':
+            return 'owned'
+        if pt in ('rent', 'rental'):
+            return 'rented'
+        # 무료 마커들
+        for src in (sp, pi, item):
+            for k in ('is_free', 'free', 'free_episode'):
+                if src.get(k) is True:
+                    return 'free'
+        # 뱃지에서 무료 표기
+        badges = ((item.get('badge') or {}).get('badge_list')) or []
+        for b in badges:
+            t = (b.get('badge_type') or '').lower()
+            if 'free' in t or '무료' in (b.get('text') or ''):
+                return 'free'
+        if pt == 'not_purchased':
+            return 'locked'
+        return 'unknown'
+
+    @staticmethod
     def episode_no_from_title(title: str) -> Optional[int]:
         """'늙은 죄수는 고독에 산다 6화' → 6. '트레일러' 같은 건 None."""
         m = re.search(r'(\d+)\s*화\b', title or '')
