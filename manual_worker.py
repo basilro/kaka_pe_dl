@@ -94,24 +94,36 @@ def cancel():
 # ---- analyze (동기) ----
 def analyze(url_or_id: str) -> Dict[str, Any]:
     """URL → series 메타 + 회차 목록. 다운로드는 안 함."""
+    P.logger.info('[manual] analyze BEGIN url_or_id=%r', url_or_id)
     series_id = KakaopageClient.extract_series_id(url_or_id)
+    P.logger.info('[manual] extract_series_id → %r', series_id)
     if not series_id:
-        return {'ret': 'fail', 'msg': 'URL에서 series_id 추출 실패'}
+        return {'ret': 'fail', 'msg': f'URL에서 series_id 추출 실패: {url_or_id!r}'}
 
     cookies_json = (P.ModelSetting.get('cookies_json') or '').strip()
     if not cookies_json:
+        P.logger.error('[manual] cookies_json 비어있음')
         return {'ret': 'fail', 'msg': '쿠키 미설정 — 설정 페이지에서 쿠키 주입 후 다시 시도'}
 
     try:
         cli = KakaopageClient(cookies_json, logger=logger)
     except AuthRequiredError as e:
+        P.logger.error('[manual] 쿠키 파싱 실패: %s', e)
         return {'ret': 'fail', 'msg': f'쿠키 인증 실패: {e}'}
+    except Exception as e:
+        P.logger.error('[manual] KakaopageClient 생성 예외: %s', e)
+        P.logger.error(traceback.format_exc())
+        return {'ret': 'fail', 'msg': f'클라이언트 생성 실패: {e}'}
 
     try:
         eps = cli.get_episodes_all(series_id)
+        P.logger.info('[manual] get_episodes_all → %d개', len(eps) if eps else 0)
     except AuthRequiredError as e:
+        P.logger.error('[manual] 회차 조회 권한 실패: %s', e)
         return {'ret': 'fail', 'msg': f'권한 만료 — 쿠키 재주입 필요: {e}'}
     except Exception as e:
+        P.logger.error('[manual] 회차 조회 예외: %s', e)
+        P.logger.error(traceback.format_exc())
         return {'ret': 'fail', 'msg': f'회차 목록 조회 실패: {e}'}
 
     if not eps:
@@ -150,6 +162,8 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
          series_id=series_id, series_title=series_title,
          episodes=episodes, total_to_download=will_download)
 
+    P.logger.info('[manual] analyze END series=%r total=%d will_download=%d',
+                  series_title, len(episodes), will_download)
     return {
         'ret': 'success',
         'series_id': series_id,
@@ -157,6 +171,26 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
         'episodes': episodes,
         'will_download': will_download,
         'total': len(episodes),
+    }
+
+
+# ---- run (분석 + 자동 시작 통합) ----
+def run_with_url(url_or_id: str) -> Dict[str, Any]:
+    """URL 하나로 분석 + 다운로드 시작까지."""
+    P.logger.info('[manual] run_with_url BEGIN url=%r', url_or_id)
+    if is_running():
+        return {'ret': 'fail', 'msg': '이미 실행 중'}
+    ar = analyze(url_or_id)
+    if ar.get('ret') != 'success':
+        return ar
+    sr = start()
+    return {
+        'ret': sr.get('ret', 'fail'),
+        'msg': sr.get('msg', ''),
+        'series_id': ar.get('series_id'),
+        'series_title': ar.get('series_title'),
+        'will_download': ar.get('will_download'),
+        'total': ar.get('total'),
     }
 
 

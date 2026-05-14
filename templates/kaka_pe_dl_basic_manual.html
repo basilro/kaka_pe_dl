@@ -3,12 +3,11 @@
 
 <div>
   {{ macros.setting_input_text_and_buttons('manual_url', '카카오페이지 작품 URL',
-      [['manualAnalyzeBtn', '분석'],
-       ['manualStartBtn',   '전체 다운로드 시작'],
-       ['manualCancelBtn',  '취소']],
+      [['manualRunBtn',    '시작'],
+       ['manualCancelBtn', '취소']],
       value='',
       desc=['예) https://page.kakao.com/content/67479044 (viewer URL 도 가능)',
-            '분석 → 회차 목록 확인 → 전체 다운로드 시작. 보유/무료 회차만 받고 잠금은 자동 스킵.']) }}
+            'URL 입력 후 시작 → 자동으로 작품 분석 + 보유/무료 회차 순차 다운로드. 잠금 회차는 자동 스킵.']) }}
 
   <div class="container-fluid" style="margin-top:10px;">
     <div class="row" style="padding:6px 0;">
@@ -112,30 +111,24 @@ $(document).ready(function(){
   pollProgress();
 });
 
-$('body').on('click', '#manualAnalyzeBtn', function(e){
+$('body').on('click', '#manualRunBtn', function(e){
   e.preventDefault();
   var url = ($('#manual_url').val() || '').trim();
   if (!url) { $.notify('URL을 입력하세요', {className: 'warn'}); return; }
-  $.notify('분석 중...', {className: 'info'});
-  $.post('/' + package_name + '/ajax/basic/manual_analyze', {arg1: url, url: url}, function(data){
+  $.notify('분석 + 다운로드 시작...', {className: 'info'});
+  $.post('/' + package_name + '/ajax/basic/manual_run',
+         {arg1: url, url: url},
+         function(data){
     if (data && data.ret === 'success'){
-      $.notify('분석 완료 — 다운로드 가능 ' + data.will_download + '/' + data.total, {className: 'success'});
-      pollProgress();
+      $.notify('작품: ' + (data.series_title || '?')
+               + ' / 다운로드 가능 ' + data.will_download + '/' + data.total,
+               {className: 'success'});
     } else {
-      $.notify((data && data.msg) || '분석 실패', {className: 'error'});
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
     }
-  });
-});
-
-$('body').on('click', '#manualStartBtn', function(e){
-  e.preventDefault();
-  $.post('/' + package_name + '/ajax/basic/manual_start', {}, function(data){
-    if (data && data.ret === 'success'){
-      $.notify('다운로드 시작', {className: 'success'});
-      pollProgress();
-    } else {
-      $.notify((data && data.msg) || '시작 실패', {className: 'error'});
-    }
+    pollProgress();
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText, {className: 'error'});
   });
 });
 
