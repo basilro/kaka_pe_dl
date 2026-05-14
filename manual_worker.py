@@ -106,7 +106,7 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
         return {'ret': 'fail', 'msg': '쿠키 미설정 — 설정 페이지에서 쿠키 주입 후 다시 시도'}
 
     try:
-        cli = KakaopageClient(cookies_json, logger=logger)
+        cli = KakaopageClient(cookies_json, logger=P.logger)
     except AuthRequiredError as e:
         P.logger.error('[manual] 쿠키 파싱 실패: %s', e)
         return {'ret': 'fail', 'msg': f'쿠키 인증 실패: {e}'}
@@ -218,7 +218,7 @@ def start() -> Dict[str, Any]:
 def _run(download_root: str):
     try:
         cookies_json = (P.ModelSetting.get('cookies_json') or '').strip()
-        cli = KakaopageClient(cookies_json, logger=logger)
+        cli = KakaopageClient(cookies_json, logger=P.logger)
         with _state_lock:
             series_id = _state['series_id']
             series_title = _state['series_title']
