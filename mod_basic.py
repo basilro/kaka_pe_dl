@@ -38,7 +38,12 @@ class ModuleBasic(PluginModuleBase):
             arg['is_running'] = F.scheduler.is_running(self.get_scheduler_name())
         return render_template(f'{P.package_name}_{self.name}_{sub}.html', arg=arg)
 
-    def process_command(self, command, arg1, arg2, arg3, req):
+    def process_command(self, command, arg1=None, arg2=None, arg3=None, req=None):
+        try:
+            P.logger.info('[basic.process_command] cmd=%r arg1=%r arg2=%r arg3=%r',
+                          command, arg1, arg2, arg3)
+        except Exception:
+            pass
         ret = {'ret': 'success'}
         try:
             if command == 'verify_cookies':
@@ -72,10 +77,16 @@ class ModuleBasic(PluginModuleBase):
                 from . import manual_worker
                 ret = {'ret': 'success', 'state': manual_worker.get_state()}
         except Exception as e:
-            logger.error('Exception: %s', e)
-            logger.error(traceback.format_exc())
+            P.logger.error('[basic.process_command] inner Exception: %s', e)
+            P.logger.error(traceback.format_exc())
             ret = {'ret': 'fail', 'msg': str(e)}
-        return jsonify(ret)
+        # jsonify 자체가 직렬화 실패할 수 있어 안전망
+        try:
+            return jsonify(ret)
+        except Exception as e:
+            P.logger.error('[basic.process_command] jsonify 실패: %s ret=%r', e, ret)
+            P.logger.error(traceback.format_exc())
+            return jsonify({'ret': 'fail', 'msg': f'jsonify 실패: {e}'})
 
     def scheduler_function(self):
         logger.debug('scheduler_function IN')
