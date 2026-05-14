@@ -144,14 +144,12 @@ class KakaopageClient:
     def get_episodes_all(self, series_id: int, window_size: int = 20) -> List[Dict]:
         """회차 전체 (페이지네이션 합쳐서). last_view/purchase_info 보존."""
         all_items = []
-        cursor = None
+        cursor = 0   # 카카오 BFF는 첫 호출에도 cursor_index=0 필수
         seen_pid = set()
         for page_no in range(100):  # 최대 100페이지 안전장치
             s = self._session(referer=f'{PAGE}/content/{series_id}')
-            params = {'series_id': series_id, 'cursor_direction': 'AFTER',
-                      'window_size': window_size}
-            if cursor is not None:
-                params['cursor_index'] = cursor
+            params = {'series_id': series_id, 'cursor_index': cursor,
+                      'cursor_direction': 'AFTER', 'window_size': window_size}
             url = f'{BFF}/api/gateway/api/v2/content/product/list'
             self._log('info', 'product/list page=%d params=%s', page_no, params)
             r = s.get(url, params=params, timeout=15)
@@ -187,7 +185,8 @@ class KakaopageClient:
             # 카카오는 마지막 item의 cursor_index 를 다음 호출 cursor 로 그대로 사용
             next_cursor = lst[-1].get('cursor_index')
             if next_cursor is None or next_cursor == cursor:
-                break
+                # 진전 없으면 +1 시도 (오래된 API 호환)
+                next_cursor = cursor + 1
             cursor = next_cursor
             time.sleep(0.3)  # rate limit 회피
         return all_items
