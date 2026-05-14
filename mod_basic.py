@@ -49,7 +49,7 @@ class ModuleBasic(PluginModuleBase):
             if command == 'verify_cookies':
                 from .client import KakaopageClient, AuthRequiredError
                 try:
-                    cli = KakaopageClient(P.ModelSetting.get('cookies_json'), logger=logger)
+                    cli = KakaopageClient(P.ModelSetting.get('cookies_json'), logger=P.logger)
                     ok = cli.verify()
                     ret = {'ret': 'success' if ok else 'fail',
                            'msg': '쿠키 유효 (로그인 상태 확인됨)' if ok else '쿠키 만료/무효 — 재주입 필요'}
