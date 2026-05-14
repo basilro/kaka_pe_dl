@@ -1,5 +1,6 @@
 import traceback
 
+from .model import ModelKakaopageItem
 from .setup import *
 from . import manual_worker
 
@@ -11,11 +12,17 @@ class ModuleManual(PluginModuleBase):
             P, name='manual', first_menu='setting',
             scheduler_desc='카카오페이지 수동 다운로드',
         )
-        # PluginModuleBase가 참조할 수 있는 기본값 명시
+        # mod_basic과 동일 패턴 — 라우트/세팅 자동 등록에 필요할 수 있음
         self.db_default = {
             f'{self.name}_db_version': '1',
+            f'{self.name}_auto_start': 'False',
+            f'{self.name}_interval': '0 */6 * * *',
+            f'{self.name}_db_delete_day': '90',
+            f'{self.name}_db_auto_delete': 'False',
         }
-        self.web_list_model = None
+        self.web_list_model = ModelKakaopageItem
+        logger.info('ModuleManual __init__ done: name=%s package=%s',
+                    self.name, P.package_name)
 
     def scheduler_function(self):
         # 수동 다운로드 모듈은 스케줄러 사용 안 함
