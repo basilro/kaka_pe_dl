@@ -57,8 +57,8 @@ class ModuleBasic(PluginModuleBase):
                     ret = {'ret': 'fail', 'msg': str(e)}
             elif command == 'run_now':
                 ret = self.do_action()
-            # ---- 수동 다운로드 (mod_basic의 sub로 통합) ----
-            elif command == 'manual_run':
+            # ---- 수동 다운로드 (명령 이름에서 manual_ 접두사 제거 — 라우터 충돌 회피) ----
+            elif command == 'mrun':
                 from . import manual_worker
                 url = (arg1 or '').strip()
                 if not url and req is not None:
@@ -67,13 +67,13 @@ class ModuleBasic(PluginModuleBase):
                                or req.args.get('url') or '').strip()
                     except Exception:
                         pass
-                logger.info('[manual_run] url=%r arg1=%r', url, arg1)
+                P.logger.info('[mrun] url=%r arg1=%r', url, arg1)
                 ret = manual_worker.run_with_url(url)
-            elif command == 'manual_cancel':
+            elif command == 'mcancel':
                 from . import manual_worker
                 manual_worker.cancel()
                 ret = {'ret': 'success', 'msg': '취소 요청 보냄'}
-            elif command == 'manual_progress':
+            elif command == 'mprogress':
                 from . import manual_worker
                 ret = {'ret': 'success', 'state': manual_worker.get_state()}
         except Exception as e:
