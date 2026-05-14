@@ -1,6 +1,5 @@
 import traceback
 
-from .model import ModelKakaopageItem
 from .setup import *
 from . import manual_worker
 
@@ -20,14 +19,9 @@ class ModuleManual(PluginModuleBase):
             raise
         logger.info('ModuleManual super().__init__ OK self.name=%s',
                     getattr(self, 'name', '<no name>'))
-        self.db_default = {
-            f'db_version': '1',
-            f'{self.name}_auto_start': 'False',
-            f'{self.name}_interval': '0 */6 * * *',
-            f'{self.name}_db_delete_day': '90',
-            f'{self.name}_db_auto_delete': 'False',
-        }
-        self.web_list_model = ModelKakaopageItem
+        # mod_basic과 ModelSetting 키 충돌 / list 라우트 충돌 피하려 비움
+        self.db_default = {}
+        # web_list_model 미설정 — mod_basic이 이미 동일 모델로 list 라우트 사용 중
         logger.info('ModuleManual __init__ END')
 
     def scheduler_function(self):
