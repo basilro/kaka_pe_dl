@@ -29,7 +29,7 @@ class ModuleManual(PluginModuleBase):
         pass
 
     def process_menu(self, sub, req):
-        logger.debug('manual.process_menu IN sub=%r', sub)
+        logger.info('manual.process_menu CALLED sub=%r', sub)
         if not sub:
             sub = 'setting'
         arg = P.ModelSetting.to_dict()
@@ -39,6 +39,35 @@ class ModuleManual(PluginModuleBase):
             logger.error('manual render_template 실패 sub=%r: %s', sub, e)
             logger.error(traceback.format_exc())
             return f'manual render failed: {e}'
+
+    # ---- SJVA가 process_menu 이외의 메서드를 부를 가능성 진단 ----
+    def plugin_load(self):
+        logger.info('manual.plugin_load CALLED')
+
+    def plugin_unload(self):
+        logger.info('manual.plugin_unload CALLED')
+
+    def __getattr__(self, name):
+        # 정의되지 않은 process_* / get_* 호출을 잡아내서 어떤 메서드가 불리는지 진단
+        if name.startswith(('process_', 'get_', 'do_')) and name not in (
+            'process_menu', 'process_command', 'process_normal',
+        ):
+            logger.warning('manual.%s (정의 안된 메서드) CALLED — falling back to process_menu', name)
+            def _fallback(*args, **kwargs):
+                # menu 처리 fallback
+                try:
+                    sub = args[0] if args else 'setting'
+                    req_obj = args[1] if len(args) > 1 else None
+                    return self.process_menu(sub, req_obj)
+                except Exception as e:
+                    logger.error('manual.%s fallback 실패: %s', name, e)
+                    return f'manual {name} fallback failed: {e}'
+            return _fallback
+        raise AttributeError(name)
+
+    def process_normal(self, sub, req):
+        logger.info('manual.process_normal CALLED sub=%r', sub)
+        return self.process_menu(sub, req)
 
     def process_command(self, command, arg1, arg2, arg3, req):
         ret = {'ret': 'success'}
