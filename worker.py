@@ -296,7 +296,8 @@ class Worker:
                 _auto_set(current_phase='downloading',
                           current_episode=it.get('title', ''),
                           current_pages_done=0, current_pages_total=0)
-                result = self._download_one(title, series_id, it, 'locked')
+                result = self._download_one(title, series_id, it, 'locked',
+                                            wf_charged=wf_ready)
                 if result != 'downloaded':
                     P.logger.info('[%s] 잠금 회차 다운 실패/스킵 — 종료', title)
                     break
@@ -334,9 +335,15 @@ class Worker:
 
     # ---- one episode ----
     def _download_one(self, series_title: str, series_id: int, ep_item: dict,
-                      availability: str = 'locked') -> str:
+                      availability: str = 'locked', wf_charged: Optional[bool] = None) -> str:
         """availability='locked' 면 ticket 차감 후 다운, 그 외(free/owned/rented)는
-        viewer/data 직접 호출 (ticket 단계 건너뜀)."""
+        viewer/data 직접 호출 (ticket 단계 건너뜀).
+
+        wf_charged: 외부 루프에서 알고 있는 기다무 충전 여부.
+          True  → RT05 우선, 실패 시 추천 type fallback
+          False → 추천 type 우선 (RT05 건너뜀), 실패 시 RT05도 시도
+          None  → 보수적으로 RT05 → 추천 type 순서
+        """
         ep_no = KakaopageClient.episode_no_from_title(ep_item.get('title', '')) or 0
         product_id = ep_item['product_id']
         episode_title = ep_item.get('title', '')
@@ -368,21 +375,41 @@ class Worker:
                 db.session.commit(); return 'failed'
             available = ready.get('available') or {}
             rec_type = available.get('ticket_rental_type')
-            P.logger.info('[%s] %s ready_to_use available=%s',
-                          series_title, episode_title, available)
+            # ready_to_use 응답 전체를 한 번 로깅 (어떤 후보 ticket이 있는지 확인용)
+            try:
+                import json as _j
+                P.logger.info('[%s] %s ready_to_use=%s',
+                              series_title, episode_title,
+                              _j.dumps(ready, ensure_ascii=False)[:800])
+            except Exception:
+                P.logger.info('[%s] %s ready_to_use available=%s',
+                              series_title, episode_title, available)
 
-            # ticket_type 결정:
-            #   use_waitfree_only=True  → RT05(기다무) 강제 (카카오 추천이 일반이어도 무시)
-            #   use_waitfree_only=False → 기다무 우선 시도(RT05), 실패 시 추천(일반) fallback
+            # ticket_type 우선순위 결정:
+            #   use_waitfree_only=True   → RT05만
+            #   Off + wf_charged=True    → RT05 우선, 실패 시 추천 type fallback
+            #   Off + wf_charged=False   → 추천 type 우선(일반), 실패 시 RT05 시도
+            #   Off + wf_charged=None    → 보수적으로 RT05 → 추천
             if self.use_waitfree_only:
                 if rec_type and rec_type != 'RT05':
                     P.logger.info('[%s] %s use_waitfree_only — 카카오 추천(%s) 무시, RT05 강제',
                                   series_title, episode_title, rec_type)
                 tries = ['RT05']
             else:
-                tries = ['RT05']
-                if rec_type and rec_type != 'RT05':
-                    tries.append(rec_type)
+                tries = []
+                if wf_charged is False:
+                    # 기다무 미충전 — 일반 대여권 먼저
+                    if rec_type:
+                        tries.append(rec_type)
+                    if 'RT05' not in tries:
+                        tries.append('RT05')
+                    P.logger.info('[%s] %s 기다무 미충전 — 일반 우선 (tries=%s)',
+                                  series_title, episode_title, tries)
+                else:
+                    # 기다무 충전됨 또는 모름 — RT05 우선
+                    tries.append('RT05')
+                    if rec_type and rec_type != 'RT05':
+                        tries.append(rec_type)
 
             used = None
             last_err = None
@@ -408,6 +435,7 @@ class Worker:
                               series_title, episode_title, tried_types)
                 return 'skipped'
 
+            # 마지막으로 성공한 type (tries 순서 그대로 시도하므로 break 시점의 마지막 element)
             ticket_used_type = tried_types[-1]
             rec.ticket_uid = used.get('ticket_uid')
             rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
