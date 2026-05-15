@@ -25,11 +25,13 @@ def _extract_own_ticket_count(tm: Dict[str, Any]) -> int:
         return 0
     candidates: List[Any] = []
 
-    # 1) result.my.* 의 알려진 키들
+    # 1) result.my.* — 카카오 실제 필드: my.ticket_rental_count (일반 대여권)
+    #    참고: my.ticket_own_count = 소장권(영구), my.cash_amount = 캐시 — 둘 다 일반 대여권 아님
     my = tm.get('my') or {}
     if isinstance(my, dict):
-        for k in ('ticket_own_count', 'ticket_rent_count', 'rental_ticket_count',
-                  'rent_ticket_count', 'own_count', 'count', 'rental_count'):
+        for k in ('ticket_rental_count',  # 카카오 실제 필드 (확인됨)
+                  'ticket_rent_count', 'rental_ticket_count', 'rent_ticket_count',
+                  'rental_count'):
             v = my.get(k)
             if v is not None:
                 candidates.append((f'my.{k}', v))
