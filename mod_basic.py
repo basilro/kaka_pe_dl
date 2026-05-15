@@ -76,6 +76,14 @@ class ModuleBasic(PluginModuleBase):
             elif command == 'mprogress':
                 from . import manual_worker
                 ret = {'ret': 'success', 'state': manual_worker.get_state()}
+            elif command == 'status_progress':
+                # 자동 + 수동 진행 상황 통합
+                from . import manual_worker, worker as auto_worker
+                ret = {
+                    'ret': 'success',
+                    'auto': auto_worker.get_auto_state(),
+                    'manual': manual_worker.get_state(),
+                }
         except Exception as e:
             P.logger.error('[basic.process_command] inner Exception: %s', e)
             P.logger.error(traceback.format_exc())

@@ -1,8 +1,9 @@
 """스케줄 1회 실행 단위 — 제목 리스트를 돌면서 다운로드 시도."""
 import os
 import re
+import threading
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from urllib.parse import unquote as urlparse_unquote
 
 from .client import KakaopageClient, KakaopageError, AuthRequiredError, NotPurchasedError
@@ -25,6 +26,52 @@ def _parse_dt(s: Optional[str]) -> Optional[datetime]:
         return None
 
 
+# ---- 자동 다운로드 진행 상태 (싱글톤) ----
+_auto_state_lock = threading.Lock()
+_auto_state: Dict[str, Any] = {
+    'status': 'idle',          # idle | running | done | error
+    'started_at': None,
+    'finished_at': None,
+    'message': '',
+    'titles_total': 0,
+    'titles_done': 0,
+    'current_title': '',
+    'current_phase': '',       # 'searching'|'check_ticket'|'fetch_episodes'|'downloading'
+    'current_episode': '',
+    'current_pages_done': 0,
+    'current_pages_total': 0,
+    'summary': {'downloaded': 0, 'skipped': 0, 'failed': 0},
+}
+
+
+def get_auto_state() -> Dict[str, Any]:
+    with _auto_state_lock:
+        snap = dict(_auto_state)
+        snap['summary'] = dict(_auto_state['summary'])
+        return snap
+
+
+def _auto_set(**kw):
+    with _auto_state_lock:
+        _auto_state.update(kw)
+
+
+def _auto_reset():
+    with _auto_state_lock:
+        _auto_state.update({
+            'status': 'idle', 'started_at': None, 'finished_at': None,
+            'message': '', 'titles_total': 0, 'titles_done': 0,
+            'current_title': '', 'current_phase': '',
+            'current_episode': '', 'current_pages_done': 0, 'current_pages_total': 0,
+            'summary': {'downloaded': 0, 'skipped': 0, 'failed': 0},
+        })
+
+
+def _auto_summary_inc(key: str, delta: int = 1):
+    with _auto_state_lock:
+        _auto_state['summary'][key] = _auto_state['summary'].get(key, 0) + delta
+
+
 class Worker:
 
     def __init__(self):
@@ -39,41 +86,66 @@ class Worker:
 
     # ---- public ----
     def run(self) -> dict:
+        _auto_reset()
+        _auto_set(status='running', started_at=datetime.now().isoformat(),
+                  message='시작', titles_total=len(self.titles))
         if not self.download_root:
             logger.error('download_path 미설정')
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='download_path 미설정')
             return {'ret': 'fail', 'reason': 'no_download_path'}
         if not self.cookies_json:
             logger.error('cookies_json 미설정')
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='cookies_json 미설정')
             return {'ret': 'fail', 'reason': 'no_cookies'}
         if not self.titles:
             logger.error('titles 미설정')
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='titles 미설정')
             return {'ret': 'fail', 'reason': 'no_titles'}
 
         try:
-            self.client = KakaopageClient(self.cookies_json, logger=logger)
+            self.client = KakaopageClient(self.cookies_json, logger=P.logger)
         except AuthRequiredError as e:
             logger.error('쿠키 인증 실패: %s', e)
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message=f'쿠키 인증 실패: {e}')
             return {'ret': 'fail', 'reason': 'auth', 'msg': str(e)}
 
         if not self.client.verify():
             logger.error('쿠키 만료 — 재주입 필요')
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='쿠키 만료 — 재주입 필요')
             return {'ret': 'fail', 'reason': 'cookie_expired'}
 
         summary = {'titles': len(self.titles), 'downloaded': 0, 'skipped': 0, 'failed': 0}
         for title in self.titles:
+            _auto_set(current_title=title, current_phase='searching',
+                      current_episode='', current_pages_done=0, current_pages_total=0)
             try:
                 got = self._process_title(title)
                 if got == 'downloaded':
                     summary['downloaded'] += 1
+                    _auto_summary_inc('downloaded')
                 elif got == 'skipped':
                     summary['skipped'] += 1
+                    _auto_summary_inc('skipped')
                 else:
                     summary['failed'] += 1
+                    _auto_summary_inc('failed')
             except Exception as e:
                 import traceback
                 logger.error('process title %r exception: %s', title, e)
                 logger.error(traceback.format_exc())
                 summary['failed'] += 1
+                _auto_summary_inc('failed')
+            _auto_set(titles_done=summary['downloaded'] + summary['skipped'] + summary['failed'])
+
+        _auto_set(status='done', finished_at=datetime.now().isoformat(),
+                  current_title='', current_phase='', current_episode='',
+                  message=(f"완료 — 다운 {summary['downloaded']}, 스킵 {summary['skipped']}, "
+                           f"실패 {summary['failed']}"))
         return {'ret': 'success', **summary}
 
     # ---- per title ----
@@ -90,6 +162,7 @@ class Worker:
         logger.info('[%s] series_id=%s', title, series_id)
 
         # 이용권 보유 + 기다무 충전 상태
+        _auto_set(current_phase='check_ticket')
         tm = self.client.get_ticket_my(series_id)
         wf = tm.get('waitfree') or {}
         my = tm.get('my') or {}
@@ -104,7 +177,9 @@ class Worker:
                 return 'skipped'
 
         # 회차 목록 + 마지막 본 회차
-        eps = self.client.get_episodes_all(series_id)
+        _auto_set(current_phase='fetch_episodes')
+        data = self.client.get_episodes_all(series_id)
+        eps = (data.get('list') if isinstance(data, dict) else data) or []
         if not eps:
             logger.warning('[%s] 회차 목록 비어있음', title)
             return 'failed'
@@ -118,9 +193,12 @@ class Worker:
             logger.info('[%s] 다음 화 없음 (최신화 도달 or 모두 구매됨)', title)
             return 'skipped'
 
+        _auto_set(current_phase='downloading')
         downloaded = 0
         for _ in range(self.max_per_run):
             ep_no = self.client.episode_no_from_title(next_ep['title'])
+            _auto_set(current_episode=next_ep.get('title', ''),
+                      current_pages_done=0, current_pages_total=0)
             result = self._download_one(title, series_id, next_ep)
             if result == 'downloaded':
                 downloaded += 1
@@ -130,7 +208,8 @@ class Worker:
                 if self.use_waitfree_only and not wf2.get('charged_complete'):
                     logger.info('[%s] 기다무 소진 — 다음 실행 대기', title)
                     break
-                eps2 = self.client.get_episodes_all(series_id)
+                data2 = self.client.get_episodes_all(series_id)
+                eps2 = (data2.get('list') if isinstance(data2, dict) else data2) or []
                 next_ep = self.client.find_next_episode(eps2, after_ep_no=ep_no)
                 if not next_ep:
                     break
@@ -203,6 +282,7 @@ class Worker:
             rec.status = 'failed'; rec.error_msg = 'no files in viewer_data'
             db.session.commit(); return 'failed'
         rec.page_count = len(files)
+        _auto_set(current_pages_total=len(files), current_pages_done=0)
 
         # 5) 저장 폴더
         s_folder = _safe_filename(series_title)
@@ -232,6 +312,7 @@ class Worker:
             try:
                 got = self.client.download_image(url, local)
                 downloaded += 1; total_bytes += got
+                _auto_set(current_pages_done=downloaded)
             except Exception as e:
                 failed.append((no, str(e)))
                 logger.warning('[%s] %s page %s 다운 실패: %s', series_title, episode_title, no, e)
