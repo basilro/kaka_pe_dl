@@ -275,25 +275,33 @@ class KakaopageClient:
         """회차 메타에서 보유/무료/잠금 추정.
 
         returns: 'owned' | 'rented' | 'free' | 'locked' | 'unknown'
+
+        주의: 'not_purchased' + is_free=True 동시인 케이스는 무료로 우선 판정.
+        rent 의 경우 rent_expire_dt 가 과거면 'locked'.
         """
+        # 무료 회차 우선 판정 (purchase_type=not_purchased 와 공존 가능)
+        if item.get('is_free') is True:
+            return 'free'
+
         sp = item.get('service_property') or {}
         pi = sp.get('purchase_info') or {}
         pt = (pi.get('purchase_type') or '').lower()
+
         if pt == 'own':
             return 'owned'
+
         if pt in ('rent', 'rental'):
+            expire = pi.get('rent_expire_dt')
+            if expire:
+                try:
+                    dt = datetime.fromisoformat(expire)
+                    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+                    if dt <= now:
+                        return 'locked'  # 만료
+                except Exception:
+                    pass
             return 'rented'
-        # 무료 마커들
-        for src in (sp, pi, item):
-            for k in ('is_free', 'free', 'free_episode'):
-                if src.get(k) is True:
-                    return 'free'
-        # 뱃지에서 무료 표기
-        badges = ((item.get('badge') or {}).get('badge_list')) or []
-        for b in badges:
-            t = (b.get('badge_type') or '').lower()
-            if 'free' in t or '무료' in (b.get('text') or ''):
-                return 'free'
+
         if pt == 'not_purchased':
             return 'locked'
         return 'unknown'
