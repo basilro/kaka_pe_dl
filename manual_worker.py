@@ -315,15 +315,15 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
     viewer_type = viewer_data.get('type') or ''
 
     s_folder = _safe_filename(series_title)
-    e_folder = f'{ep_no:04d}_{_safe_filename(episode_title)}'
-    save_dir = os.path.join(download_root, s_folder, e_folder)
-    os.makedirs(save_dir, exist_ok=True)
-    rec.save_dir = save_dir
-    _ep_update(idx, save_dir=save_dir)
-    db.session.commit()
+    series_dir = os.path.join(download_root, s_folder)
 
-    # === 소설 (TextViewerData) ===
+    # === 소설 (TextViewerData) — 회차 폴더 없이 작품폴더 직속 NNNN_제목.txt ===
     if viewer_type == 'TextViewerData':
+        os.makedirs(series_dir, exist_ok=True)
+        rec.save_dir = series_dir
+        _ep_update(idx, save_dir=series_dir)
+        db.session.commit()
+
         ats = viewer_data.get('atsServerUrl') or ''
         contents = viewer_data.get('contentsList') or []
         if not contents:
@@ -354,7 +354,8 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
             rec.status = 'failed'; rec.error_msg = 'no text extracted'
             db.session.commit(); return 'failed'
 
-        save_path = os.path.join(save_dir, f'{ep_no:04d}.txt')
+        fname = f'{ep_no:04d}_{_safe_filename(episode_title)}.txt'
+        save_path = os.path.join(series_dir, fname)
         with open(save_path, 'w', encoding='utf-8') as f:
             f.write('\n\n'.join(paragraphs))
         total_bytes = os.path.getsize(save_path)
@@ -372,7 +373,14 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
         db.session.commit()
         return 'completed' if rec.status == 'completed' else 'failed'
 
-    # === 웹툰 (이미지) ===
+    # === 웹툰 (이미지) — 회차폴더 안에 페이지 이미지들 ===
+    e_folder = f'{ep_no:04d}_{_safe_filename(episode_title)}'
+    save_dir = os.path.join(series_dir, e_folder)
+    os.makedirs(save_dir, exist_ok=True)
+    rec.save_dir = save_dir
+    _ep_update(idx, save_dir=save_dir)
+    db.session.commit()
+
     files = (viewer_data.get('imageDownloadData') or {}).get('files') or []
     if not files:
         _ep_update(idx, state='skipped', error=f'다운로드 데이터 없음 (type={viewer_type})')
