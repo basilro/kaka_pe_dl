@@ -445,16 +445,26 @@ class KakaopageClient:
         return out
 
     def download_novel_chapter(self, ats_server_url: str, secure_url: str) -> List[str]:
-        """소설 chapter content json 다운 → 단락 리스트 반환."""
+        """소설 chapter content json 다운 → 단락 리스트 반환.
+
+        주의: requests.json()은 응답 charset 헤더가 없으면 ISO-8859-1로 디코딩해서
+        한글이 다 깨짐. r.content (bytes) 를 직접 json.loads로 파싱해야 utf-8로 처리됨.
+        """
         url = ats_server_url + secure_url
         s = self._session()
         r = s.get(url, timeout=20)
         if r.status_code != 200:
             raise KakaopageError(f'novel content fetch {r.status_code}')
         try:
-            data = r.json()
-        except Exception:
-            raise KakaopageError(f'novel content invalid json: {r.text[:200]}')
+            data = json.loads(r.content)  # bytes → utf-8 default
+        except Exception as e:
+            # 디버깅: 응답 첫 부분을 raw로 한 번 찍어서 형태 확인 (gzip/binary/text 등)
+            try:
+                self._log('error', 'novel content invalid json: %s ... content[:200]=%r',
+                          e, r.content[:200])
+            except Exception:
+                pass
+            raise KakaopageError(f'novel content invalid json: {e}')
         ci = data.get('contentInfo') or {}
         return self._extract_paragraphs(ci.get('paragraphList'))
 
