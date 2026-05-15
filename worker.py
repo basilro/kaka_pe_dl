@@ -163,22 +163,7 @@ class Worker:
         series_id = series['series_id']
         P.logger.info('[%s] series_id=%s', title, series_id)
 
-        # 이용권 보유 + 기다무 충전 상태
-        _auto_set(current_phase='check_ticket')
-        tm = self.client.get_ticket_my(series_id)
-        wf = tm.get('waitfree') or {}
-        my = tm.get('my') or {}
-        if self.use_waitfree_only:
-            if not wf.get('charged_complete'):
-                P.logger.info('[%s] 기다무 미충전 — 스킵 (충전 예정: %s)',
-                            title, wf.get('charged_at'))
-                return 'skipped'
-        else:
-            if not (wf.get('charged_complete') or my.get('ticket_own_count', 0) > 0):
-                P.logger.info('[%s] 사용 가능한 이용권 없음 — 스킵', title)
-                return 'skipped'
-
-        # 회차 목록 + 마지막 본 회차
+        # 회차 목록
         _auto_set(current_phase='fetch_episodes')
         data = self.client.get_episodes_all(series_id)
         eps = (data.get('list') if isinstance(data, dict) else data) or []
@@ -186,46 +171,91 @@ class Worker:
             P.logger.warning('[%s] 회차 목록 비어있음', title)
             return 'failed'
 
-        last_viewed = self.client.find_last_viewed(eps)
-        last_ep_no = self.client.episode_no_from_title(last_viewed['title']) if last_viewed else 0
-        P.logger.info('[%s] 마지막 본 회차: %s화', title, last_ep_no)
+        # 분류: 받지 않은 회차들 → free/owned/rented(직접) vs locked(기다무 ticket 필요)
+        free_owned: List = []   # (item, availability)
+        locked: List = []
+        for x in eps:
+            it = x['item']
+            pid = it.get('product_id')
+            if not pid:
+                continue
+            rec = db.session.query(ModelKakaopageItem).filter_by(product_id=pid).first()
+            if rec and rec.status == 'completed':
+                continue
+            avail = KakaopageClient.episode_availability(it)
+            if avail in ('free', 'owned', 'rented'):
+                free_owned.append((it, avail))
+            elif avail == 'locked':
+                locked.append((it, avail))
+        ep_key = lambda t: KakaopageClient.episode_no_from_title(t[0].get('title', '')) or 0
+        free_owned.sort(key=ep_key)
+        locked.sort(key=ep_key)
+        P.logger.info('[%s] 미수신 — 무료/보유 %d개, 잠금 %d개',
+                      title, len(free_owned), len(locked))
 
-        next_ep = self.client.find_next_episode(eps, after_ep_no=last_ep_no)
-        if not next_ep:
-            P.logger.info('[%s] 다음 화 없음 (최신화 도달 or 모두 구매됨)', title)
-            return 'skipped'
-
+        downloaded_count = 0
         _auto_set(current_phase='downloading')
-        downloaded = 0
-        for _ in range(self.max_per_run):
-            ep_no = self.client.episode_no_from_title(next_ep['title'])
-            _auto_set(current_episode=next_ep.get('title', ''),
+
+        # 1) 무료/보유 직접 다운 (제한 없음)
+        for it, avail in free_owned:
+            _auto_set(current_episode=it.get('title', ''),
                       current_pages_done=0, current_pages_total=0)
-            result = self._download_one(title, series_id, next_ep)
+            result = self._download_one(title, series_id, it, avail)
             if result == 'downloaded':
-                downloaded += 1
-                # 다음 회차로 진행 (기다무는 보통 한 번에 1장만 충전돼서 break)
-                tm2 = self.client.get_ticket_my(series_id)
-                wf2 = tm2.get('waitfree') or {}
-                if self.use_waitfree_only and not wf2.get('charged_complete'):
-                    P.logger.info('[%s] 기다무 소진 — 다음 실행 대기', title)
+                downloaded_count += 1
+
+        # 2) 잠금 회차 — 기다무/보유 이용권 차감 후 다운 (max_per_run 만큼)
+        if locked:
+            _auto_set(current_phase='check_ticket')
+            tm = self.client.get_ticket_my(series_id)
+            wf = tm.get('waitfree') or {}
+            my = tm.get('my') or {}
+
+            ticket_used = 0
+            for it, _ in locked:
+                if ticket_used >= self.max_per_run:
+                    P.logger.info('[%s] max_per_run(%d) 도달', title, self.max_per_run)
                     break
-                data2 = self.client.get_episodes_all(series_id)
-                eps2 = (data2.get('list') if isinstance(data2, dict) else data2) or []
-                next_ep = self.client.find_next_episode(eps2, after_ep_no=ep_no)
-                if not next_ep:
+
+                if self.use_waitfree_only:
+                    if not wf.get('charged_complete'):
+                        P.logger.info('[%s] 기다무 미충전 — 잠금 회차 다운 종료 (충전 예정: %s)',
+                                      title, wf.get('charged_at'))
+                        break
+                else:
+                    if not (wf.get('charged_complete') or my.get('ticket_own_count', 0) > 0):
+                        P.logger.info('[%s] 사용 가능한 이용권 없음 — 종료', title)
+                        break
+
+                _auto_set(current_phase='downloading',
+                          current_episode=it.get('title', ''),
+                          current_pages_done=0, current_pages_total=0)
+                result = self._download_one(title, series_id, it, 'locked')
+                if result == 'downloaded':
+                    downloaded_count += 1
+                    ticket_used += 1
+                    # ticket 상태 갱신
+                    _auto_set(current_phase='check_ticket')
+                    tm = self.client.get_ticket_my(series_id)
+                    wf = tm.get('waitfree') or {}
+                    my = tm.get('my') or {}
+                else:
+                    # 실패 시 추가 ticket 시도 안 함
+                    P.logger.info('[%s] 잠금 회차 다운 실패/스킵 — 종료', title)
                     break
-            else:
-                break
-        return 'downloaded' if downloaded else 'failed'
+
+        return 'downloaded' if downloaded_count else 'skipped'
 
     # ---- one episode ----
-    def _download_one(self, series_title: str, series_id: int, ep_item: dict) -> str:
+    def _download_one(self, series_title: str, series_id: int, ep_item: dict,
+                      availability: str = 'locked') -> str:
+        """availability='locked' 면 ticket 차감 후 다운, 그 외(free/owned/rented)는
+        viewer/data 직접 호출 (ticket 단계 건너뜀)."""
         ep_no = KakaopageClient.episode_no_from_title(ep_item.get('title', '')) or 0
         product_id = ep_item['product_id']
         episode_title = ep_item.get('title', '')
 
-        # DB 레코드 확보 (product_id 유일 인덱스)
+        # DB 레코드 확보
         rec = db.session.query(ModelKakaopageItem).filter_by(product_id=product_id).first()
         if rec and rec.status == 'completed':
             P.logger.info('[%s] %s 이미 다운로드 완료 — 스킵', series_title, episode_title)
@@ -240,40 +270,41 @@ class Worker:
             db.session.add(rec)
             db.session.commit()
 
-        rec.status = 'using_ticket'
         rec.updated_time = datetime.now()
-        db.session.commit()
 
-        # 1) 사용 가능 여부 확인
-        try:
-            ready = self.client.ready_to_use(product_id)
-        except KakaopageError as e:
-            rec.status = 'failed'; rec.error_msg = f'ready_to_use: {e}'
-            db.session.commit(); return 'failed'
-        ticket_rental_type = (ready.get('available') or {}).get('ticket_rental_type')
-        if not ticket_rental_type:
-            P.logger.info('[%s] %s 무료/유료 외 케이스 — 스킵', series_title, episode_title)
-            rec.status = 'skipped_no_ticket'; db.session.commit(); return 'skipped'
+        # ---- ticket 단계 (잠금 회차만) ----
+        if availability == 'locked':
+            rec.status = 'using_ticket'; db.session.commit()
+            try:
+                ready = self.client.ready_to_use(product_id)
+            except KakaopageError as e:
+                rec.status = 'failed'; rec.error_msg = f'ready_to_use: {e}'
+                db.session.commit(); return 'failed'
+            ticket_rental_type = (ready.get('available') or {}).get('ticket_rental_type')
+            if not ticket_rental_type:
+                P.logger.info('[%s] %s 사용 가능 ticket 없음 — 스킵',
+                              series_title, episode_title)
+                rec.status = 'skipped_no_ticket'; db.session.commit(); return 'skipped'
+            try:
+                used = self.client.use_ticket(product_id, ticket_type=ticket_rental_type)
+            except KakaopageError as e:
+                rec.status = 'failed'; rec.error_msg = f'use_ticket: {e}'
+                db.session.commit(); return 'failed'
+            rec.ticket_uid = used.get('ticket_uid')
+            rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
+            db.session.commit()
+            P.logger.info('[%s] %s ticket 차감 OK (type=%s uid=%s expire=%s)',
+                          series_title, episode_title, ticket_rental_type,
+                          rec.ticket_uid, rec.rent_expire_dt)
+            try:
+                self.client.open_page(series_id, product_id, rec.ticket_uid or '')
+            except KakaopageError as e:
+                P.logger.warning('open_page 실패 (계속): %s', e)
+        else:
+            P.logger.info('[%s] %s 직접 다운 (availability=%s)',
+                          series_title, episode_title, availability)
 
-        # 2) 차감
-        try:
-            used = self.client.use_ticket(product_id, ticket_type=ticket_rental_type)
-        except KakaopageError as e:
-            rec.status = 'failed'; rec.error_msg = f'use_ticket: {e}'
-            db.session.commit(); return 'failed'
-        rec.ticket_uid = used.get('ticket_uid')
-        rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
-        db.session.commit()
-        P.logger.info('[%s] %s 차감 OK (ticket_uid=%s, expire=%s)',
-                    series_title, episode_title, rec.ticket_uid, rec.rent_expire_dt)
-
-        # 3) 열람 등록
-        try:
-            self.client.open_page(series_id, product_id, rec.ticket_uid or '')
-        except KakaopageError as e:
-            P.logger.warning('open_page 실패 (계속 진행): %s', e)
-
-        # 4) viewer/data
+        # ---- viewer/data ----
         try:
             vd = self.client.viewer_data(series_id, product_id)
         except KakaopageError as e:
