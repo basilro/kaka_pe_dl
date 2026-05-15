@@ -21,7 +21,8 @@ class ModuleBasic(PluginModuleBase):
             f'{P.package_name}_item_last_list_option': '',
 
             # 사용자 설정
-            'titles': '',                # 'A|B|C'
+            'titles': '',                # 웹툰 — 한 줄에 하나 (또는 |). 제목/URL/숫자/path 모두 가능
+            'titles_novel': '',          # 소설 — 같은 형식
             'cookies_json': '',          # Cookie-Editor export JSON
             'download_path': '',
             'max_per_run': '1',

@@ -259,7 +259,7 @@ class KakaopageClient:
             return None
         if s.isdigit():
             return int(s)
-        m = re.search(r'/content/(\d+)', s)
+        m = re.search(r'content/(\d+)', s)   # leading slash 없는 'content/12345' 도 매칭
         if m:
             return int(m.group(1))
         m = re.search(r'[?&](?:series_id|seriesid)=(\d+)', s, re.I)
@@ -394,7 +394,54 @@ class KakaopageClient:
         except Exception as e:
             self._log('warning', 'report_last_page failed: %s', e)
 
-    # ---- 다운로드 ----
+    # ---- 소설 텍스트 ----
+    @staticmethod
+    def _extract_paragraphs(paragraphs) -> List[str]:
+        """카카오 소설 paragraphList → 단락 string 리스트.
+
+        구조: [{type, text, childParagraphList:[{type:'TEXT', text:'...'}]}]
+        TEXT 노드의 text 만 추출 — &nbsp;, &lt; 등 HTML 엔티티는 그대로.
+        """
+        import html
+        out: List[str] = []
+        for p in paragraphs or []:
+            ptype = (p.get('type') or '').upper()
+            children = p.get('childParagraphList') or []
+            if ptype in ('P', 'H1', 'H2', 'H3', 'DIV'):
+                # 단락: 자식의 TEXT 합침
+                buf = []
+                for c in children:
+                    if (c.get('type') or '').upper() == 'TEXT':
+                        t = c.get('text') or ''
+                        buf.append(html.unescape(t))
+                line = ''.join(buf).strip()
+                if line:
+                    out.append(line)
+            elif ptype == 'TEXT':
+                t = (p.get('text') or '').strip()
+                if t:
+                    out.append(html.unescape(t))
+            else:
+                # IMG, BR 등은 자식 검사
+                if children:
+                    out.extend(KakaopageClient._extract_paragraphs(children))
+        return out
+
+    def download_novel_chapter(self, ats_server_url: str, secure_url: str) -> List[str]:
+        """소설 chapter content json 다운 → 단락 리스트 반환."""
+        url = ats_server_url + secure_url
+        s = self._session()
+        r = s.get(url, timeout=20)
+        if r.status_code != 200:
+            raise KakaopageError(f'novel content fetch {r.status_code}')
+        try:
+            data = r.json()
+        except Exception:
+            raise KakaopageError(f'novel content invalid json: {r.text[:200]}')
+        ci = data.get('contentInfo') or {}
+        return self._extract_paragraphs(ci.get('paragraphList'))
+
+    # ---- 다운로드 (이미지) ----
     def download_image(self, secure_url: str, save_path: str) -> int:
         """secureUrl 다운로드 → 파일 저장 → bytes 반환."""
         s = self._session()

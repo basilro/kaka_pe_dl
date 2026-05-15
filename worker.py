@@ -78,19 +78,33 @@ class Worker:
         self.cfg = P.ModelSetting.to_dict()
         self.download_root = (self.cfg.get('download_path') or '').strip()
         self.cookies_json = (self.cfg.get('cookies_json') or '').strip()
-        titles_raw = (self.cfg.get('titles') or '').strip()
-        self.titles = [t.strip() for t in titles_raw.split('|') if t.strip()]
+        # 입력: textarea(newline) + |  둘 다 split. 각 항목은 제목/URL/숫자/path 모두 가능.
+        self.items: List[Dict[str, Any]] = []
+        for raw in self._split_items(self.cfg.get('titles') or ''):
+            self.items.append({'raw': raw, 'is_novel': False})
+        for raw in self._split_items(self.cfg.get('titles_novel') or ''):
+            self.items.append({'raw': raw, 'is_novel': True})
         self.max_per_run = int(self.cfg.get('max_per_run') or '1')
         self.use_waitfree_only = (self.cfg.get('use_waitfree_only') or 'True') == 'True'
         self.client: Optional[KakaopageClient] = None
 
+    @staticmethod
+    def _split_items(raw: str) -> List[str]:
+        out = []
+        for chunk in (raw or '').replace('\r', '').replace('|', '\n').split('\n'):
+            s = chunk.strip()
+            if s:
+                out.append(s)
+        return out
+
     # ---- public ----
     def run(self) -> dict:
-        P.logger.info('[basic] Worker.run BEGIN titles=%s use_waitfree_only=%s max_per_run=%s',
-                      self.titles, self.use_waitfree_only, self.max_per_run)
+        P.logger.info('[basic] Worker.run BEGIN items=%s use_waitfree_only=%s max_per_run=%s',
+                      [i['raw'] + (' (소설)' if i['is_novel'] else '') for i in self.items],
+                      self.use_waitfree_only, self.max_per_run)
         _auto_reset()
         _auto_set(status='running', started_at=datetime.now().isoformat(),
-                  message='시작', titles_total=len(self.titles))
+                  message='시작', titles_total=len(self.items))
         if not self.download_root:
             P.logger.error('download_path 미설정')
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
@@ -101,10 +115,10 @@ class Worker:
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='cookies_json 미설정')
             return {'ret': 'fail', 'reason': 'no_cookies'}
-        if not self.titles:
-            P.logger.error('titles 미설정')
+        if not self.items:
+            P.logger.error('체크할 작품 미설정')
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
-                      message='titles 미설정')
+                      message='체크할 작품 미설정')
             return {'ret': 'fail', 'reason': 'no_titles'}
 
         try:
@@ -121,12 +135,13 @@ class Worker:
                       message='쿠키 만료 — 재주입 필요')
             return {'ret': 'fail', 'reason': 'cookie_expired'}
 
-        summary = {'titles': len(self.titles), 'downloaded': 0, 'skipped': 0, 'failed': 0}
-        for title in self.titles:
-            _auto_set(current_title=title, current_phase='searching',
+        summary = {'titles': len(self.items), 'downloaded': 0, 'skipped': 0, 'failed': 0}
+        for item in self.items:
+            _auto_set(current_title=item['raw'] + (' [소설]' if item['is_novel'] else ''),
+                      current_phase='searching',
                       current_episode='', current_pages_done=0, current_pages_total=0)
             try:
-                got = self._process_title(title)
+                got = self._process_item(item)
                 if got == 'downloaded':
                     summary['downloaded'] += 1
                     _auto_summary_inc('downloaded')
@@ -138,7 +153,7 @@ class Worker:
                     _auto_summary_inc('failed')
             except Exception as e:
                 import traceback
-                P.logger.error('process title %r exception: %s', title, e)
+                P.logger.error('process item %r exception: %s', item, e)
                 P.logger.error(traceback.format_exc())
                 summary['failed'] += 1
                 _auto_summary_inc('failed')
@@ -150,18 +165,34 @@ class Worker:
                            f"실패 {summary['failed']}"))
         return {'ret': 'success', **summary}
 
-    # ---- per title ----
-    def _process_title(self, title: str) -> str:
-        P.logger.info('[%s] 처리 시작', title)
-        series = self.client.find_series(title, category='웹툰')
-        if not series:
-            series = self.client.find_series(title, category='')
-        if not series:
-            P.logger.warning('[%s] 검색 결과에서 매칭 실패', title)
-            return 'failed'
+    # ---- per item (제목/URL/숫자 어느 형태든 처리) ----
+    def _process_item(self, item: Dict[str, Any]) -> str:
+        raw = item['raw']
+        is_novel = item['is_novel']
+        kind_label = '소설' if is_novel else '웹툰'
 
-        series_id = series['series_id']
-        P.logger.info('[%s] series_id=%s', title, series_id)
+        # 1) URL/숫자/path → series_id 직접
+        sid = KakaopageClient.extract_series_id(raw)
+        if sid:
+            series_id = sid
+            display_title = raw
+            P.logger.info('[%s] [%s] series_id 직접: %s', kind_label, raw, series_id)
+        else:
+            # 2) 제목 → 검색
+            category = '웹소설' if is_novel else '웹툰'
+            series = self.client.find_series(raw, category=category)
+            if not series:
+                series = self.client.find_series(raw, category='')
+            if not series:
+                P.logger.warning('[%s] [%s] 검색 결과 매칭 실패', kind_label, raw)
+                return 'failed'
+            series_id = series['series_id']
+            display_title = raw
+            P.logger.info('[%s] [%s] 검색→ series_id=%s', kind_label, raw, series_id)
+
+        return self._process_series(display_title, series_id, is_novel)
+
+    def _process_series(self, title: str, series_id: int, is_novel: bool) -> str:
 
         # 회차 목록
         _auto_set(current_phase='fetch_episodes')
@@ -310,14 +341,10 @@ class Worker:
         except KakaopageError as e:
             rec.status = 'failed'; rec.error_msg = f'viewer_data: {e}'
             db.session.commit(); return 'failed'
-        files = ((vd.get('viewerData') or {}).get('imageDownloadData') or {}).get('files') or []
-        if not files:
-            rec.status = 'failed'; rec.error_msg = 'no files in viewer_data'
-            db.session.commit(); return 'failed'
-        rec.page_count = len(files)
-        _auto_set(current_pages_total=len(files), current_pages_done=0)
+        viewer_data = vd.get('viewerData') or {}
+        viewer_type = viewer_data.get('type') or ''
 
-        # 5) 저장 폴더
+        # 저장 폴더 (공통)
         s_folder = _safe_filename(series_title)
         e_folder = f'{ep_no:04d}_{_safe_filename(episode_title)}'
         save_dir = os.path.join(self.download_root, s_folder, e_folder)
@@ -326,43 +353,87 @@ class Worker:
         rec.status = 'downloading'
         db.session.commit()
 
-        # 6) 이미지 다운로드
-        downloaded = 0; total_bytes = 0
-        failed = []
-        for f in files:
-            no = f.get('no')
-            url = f.get('secureUrl')
-            ext = '.jpg'
-            # 파일명에서 확장자 추출 시도
-            try:
-                fname_param = re.search(r'filename=([^&]+)', url).group(1)
-                fname_param = urlparse_unquote(fname_param)
-                if '.' in fname_param:
-                    ext = '.' + fname_param.rsplit('.', 1)[-1]
-            except Exception:
-                pass
-            local = os.path.join(save_dir, f'{no:03d}{ext}')
-            try:
-                got = self.client.download_image(url, local)
-                downloaded += 1; total_bytes += got
-                _auto_set(current_pages_done=downloaded)
-            except Exception as e:
-                failed.append((no, str(e)))
-                P.logger.warning('[%s] %s page %s 다운 실패: %s', series_title, episode_title, no, e)
+        # === 소설 (TextViewerData) ===
+        if viewer_type == 'TextViewerData':
+            ats = viewer_data.get('atsServerUrl') or ''
+            contents = viewer_data.get('contentsList') or []
+            if not contents:
+                rec.status = 'failed'; rec.error_msg = 'no contentsList'
+                db.session.commit(); return 'failed'
+            rec.page_count = len(contents)
+            _auto_set(current_pages_total=len(contents), current_pages_done=0)
+
+            paragraphs: List[str] = []
+            done = 0
+            for c in contents:
+                secure = c.get('secureUrl')
+                if not secure:
+                    continue
+                try:
+                    ps = self.client.download_novel_chapter(ats, secure)
+                    paragraphs.extend(ps)
+                    done += 1
+                    _auto_set(current_pages_done=done)
+                except Exception as e:
+                    P.logger.warning('[%s] %s content %s 다운 실패: %s',
+                                     series_title, episode_title, c.get('chapterId'), e)
+            if not paragraphs:
+                rec.status = 'failed'; rec.error_msg = 'no text extracted'
+                db.session.commit(); return 'failed'
+
+            save_path = os.path.join(save_dir, f'{ep_no:04d}.txt')
+            with open(save_path, 'w', encoding='utf-8') as f:
+                f.write('\n\n'.join(paragraphs))
+            total_bytes = os.path.getsize(save_path)
+            downloaded = done
+            files_count = len(contents)
+            failed = []
+        # === 웹툰 (이미지) ===
+        else:
+            files = (viewer_data.get('imageDownloadData') or {}).get('files') or []
+            if not files:
+                rec.status = 'failed'; rec.error_msg = f'no image files in viewer_data (type={viewer_type})'
+                db.session.commit(); return 'failed'
+            rec.page_count = len(files)
+            _auto_set(current_pages_total=len(files), current_pages_done=0)
+
+            downloaded = 0; total_bytes = 0
+            failed = []
+            for f in files:
+                no = f.get('no')
+                url = f.get('secureUrl')
+                ext = '.jpg'
+                try:
+                    fname_param = re.search(r'filename=([^&]+)', url).group(1)
+                    fname_param = urlparse_unquote(fname_param)
+                    if '.' in fname_param:
+                        ext = '.' + fname_param.rsplit('.', 1)[-1]
+                except Exception:
+                    pass
+                local = os.path.join(save_dir, f'{no:03d}{ext}')
+                try:
+                    got = self.client.download_image(url, local)
+                    downloaded += 1; total_bytes += got
+                    _auto_set(current_pages_done=downloaded)
+                except Exception as e:
+                    failed.append((no, str(e)))
+                    P.logger.warning('[%s] %s page %s 다운 실패: %s',
+                                     series_title, episode_title, no, e)
+            files_count = len(files)
         rec.downloaded_count = downloaded
         rec.total_bytes = total_bytes
         rec.downloaded_at = datetime.now()
         rec.updated_time = rec.downloaded_at
 
-        if downloaded == len(files):
+        if downloaded == files_count:
             rec.status = 'completed'
-            P.logger.info('[%s] %s 다운로드 완료 (%d장, %.1fMB)',
-                        series_title, episode_title, downloaded, total_bytes/1024/1024)
+            P.logger.info('[%s] %s 다운로드 완료 (%d개, %.1fKB)',
+                        series_title, episode_title, downloaded, total_bytes / 1024)
         else:
             rec.status = 'partial'
-            rec.error_msg = f'failed {len(failed)}/{len(files)}'
+            rec.error_msg = f'failed {len(failed)}/{files_count}'
             P.logger.warning('[%s] %s 일부 실패 (%d/%d)',
-                           series_title, episode_title, downloaded, len(files))
+                           series_title, episode_title, downloaded, files_count)
         db.session.commit()
 
         # 7) 진행 보고
