@@ -97,20 +97,23 @@ class ModuleBasic(PluginModuleBase):
             return jsonify({'ret': 'fail', 'msg': f'jsonify 실패: {e}'})
 
     def scheduler_function(self):
-        logger.debug('scheduler_function IN')
+        P.logger.info('[basic] scheduler_function CALLED')
         try:
             ret = self.do_action()
-            logger.info('scheduler 종료: %s', ret)
+            P.logger.info('[basic] scheduler 종료: %s', ret)
         except Exception as e:
-            logger.error('Exception: %s', e)
-            logger.error(traceback.format_exc())
+            P.logger.error('[basic] scheduler Exception: %s', e)
+            P.logger.error(traceback.format_exc())
 
     def do_action(self):
+        P.logger.info('[basic] do_action BEGIN')
         try:
             with F.app.app_context():
                 w = Worker()
-                return w.run()
+                ret = w.run()
+                P.logger.info('[basic] do_action END ret=%s', ret)
+                return ret
         except Exception as e:
-            logger.error('Exception: %s', e)
-            logger.error(traceback.format_exc())
+            P.logger.error('[basic] do_action Exception: %s', e)
+            P.logger.error(traceback.format_exc())
             return {'ret': 'fail', 'msg': str(e)}
