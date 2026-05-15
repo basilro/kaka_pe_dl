@@ -311,14 +311,8 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
         rec.status = 'failed'; rec.error_msg = f'viewer_data: {e}'; db.session.commit()
         return 'failed'
 
-    files = ((vd.get('viewerData') or {}).get('imageDownloadData') or {}).get('files') or []
-    if not files:
-        _ep_update(idx, state='skipped', error='이미지 목록 없음(잠금 가능성)')
-        rec.status = 'skipped_no_ticket'; db.session.commit()
-        return 'skipped'
-
-    rec.page_count = len(files)
-    _ep_update(idx, pages_total=len(files), pages_done=0)
+    viewer_data = vd.get('viewerData') or {}
+    viewer_type = viewer_data.get('type') or ''
 
     s_folder = _safe_filename(series_title)
     e_folder = f'{ep_no:04d}_{_safe_filename(episode_title)}'
@@ -327,6 +321,66 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
     rec.save_dir = save_dir
     _ep_update(idx, save_dir=save_dir)
     db.session.commit()
+
+    # === 소설 (TextViewerData) ===
+    if viewer_type == 'TextViewerData':
+        ats = viewer_data.get('atsServerUrl') or ''
+        contents = viewer_data.get('contentsList') or []
+        if not contents:
+            _ep_update(idx, state='skipped', error='contentsList 없음')
+            rec.status = 'skipped_no_ticket'; db.session.commit()
+            return 'skipped'
+        rec.page_count = len(contents)
+        _ep_update(idx, pages_total=len(contents), pages_done=0)
+
+        paragraphs = []
+        done = 0
+        for c in contents:
+            if _cancel_flag.is_set():
+                break
+            secure = c.get('secureUrl')
+            if not secure:
+                continue
+            try:
+                ps = cli.download_novel_chapter(ats, secure)
+                paragraphs.extend(ps)
+                done += 1
+                _ep_update(idx, pages_done=done)
+            except Exception as e:
+                P.logger.warning('novel %s c%s 실패: %s', episode_title, c.get('chapterId'), e)
+
+        if not paragraphs:
+            _ep_update(idx, state='failed', error='텍스트 추출 실패')
+            rec.status = 'failed'; rec.error_msg = 'no text extracted'
+            db.session.commit(); return 'failed'
+
+        save_path = os.path.join(save_dir, f'{ep_no:04d}.txt')
+        with open(save_path, 'w', encoding='utf-8') as f:
+            f.write('\n\n'.join(paragraphs))
+        total_bytes = os.path.getsize(save_path)
+        rec.downloaded_count = done
+        rec.total_bytes = total_bytes
+        rec.downloaded_at = datetime.now()
+        rec.updated_time = rec.downloaded_at
+        if done == len(contents):
+            rec.status = 'completed'
+            _ep_update(idx, state='completed')
+        else:
+            rec.status = 'partial'
+            _ep_update(idx, state='failed',
+                       error=f'부분실패 {len(contents)-done}/{len(contents)}')
+        db.session.commit()
+        return 'completed' if rec.status == 'completed' else 'failed'
+
+    # === 웹툰 (이미지) ===
+    files = (viewer_data.get('imageDownloadData') or {}).get('files') or []
+    if not files:
+        _ep_update(idx, state='skipped', error=f'다운로드 데이터 없음 (type={viewer_type})')
+        rec.status = 'skipped_no_ticket'; db.session.commit()
+        return 'skipped'
+
+    rec.page_count = len(files)
+    _ep_update(idx, pages_total=len(files), pages_done=0)
 
     downloaded = 0; total_bytes = 0; failed = 0
     for f in files:
@@ -350,7 +404,7 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
             _ep_update(idx, pages_done=downloaded)
         except Exception as e:
             failed += 1
-            logger.warning('manual %s p%s 실패: %s', episode_title, no, e)
+            P.logger.warning('manual %s p%s 실패: %s', episode_title, no, e)
 
     rec.downloaded_count = downloaded
     rec.total_bytes = total_bytes

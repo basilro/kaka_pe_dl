@@ -16,8 +16,20 @@
   <form id='setting' name='setting'>
     <div class="tab-content" id="nav-tabContent">
       {{ macros.m_tab_content_start('normal', true) }}
-        {{ macros.setting_input_text('titles', '체크할 작품 제목',
-            value=arg['titles'], desc=['여러 개는 | 로 구분. 정확한 카카오페이지 표기 제목 사용.', '예: 늙은 죄수는 고독에 산다|좀비물 민폐 악녀가 된 K직장인']) }}
+        {{ macros.setting_input_textarea('titles', '체크할 웹툰',
+            value=arg['titles'], row='5',
+            desc=['한 줄에 하나씩 (또는 | 로 구분).',
+                  '입력 형태 자유: 작품 제목 / 전체 URL / content/숫자 / 숫자(series_id) 모두 가능.',
+                  '예) 늙은 죄수는 고독에 산다',
+                  '예) https://page.kakao.com/content/67479044',
+                  '예) content/67479044',
+                  '예) 67479044']) }}
+
+        {{ macros.setting_input_textarea('titles_novel', '체크할 소설',
+            value=arg['titles_novel'], row='5',
+            desc=['웹소설용. 한 줄에 하나씩 (또는 | 로 구분).',
+                  '제목/URL/숫자/path 모두 가능.',
+                  '예) 은해상단 막내아들  또는  content/62112560']) }}
 
         {{ macros.setting_input_textarea('cookies_json', '카카오 쿠키 (Cookie-Editor JSON)',
             value=arg['cookies_json'], row='6',
