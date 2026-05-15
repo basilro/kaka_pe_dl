@@ -26,7 +26,8 @@ class ModuleBasic(PluginModuleBase):
             'cookies_json': '',          # Cookie-Editor export JSON
             'download_path': '',
             'max_per_run': '1',
-            'use_waitfree_only': 'True',
+            'use_waitfree': 'True',       # 기다무 대여권 사용
+            'use_owned_rental': 'False',  # 일반(보유) 대여권 사용
             'auto_start': 'False',
         }
         self.web_list_model = ModelKakaopageItem
