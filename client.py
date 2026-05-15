@@ -157,19 +157,19 @@ class KakaopageClient:
                   phase, r.status_code, r.text[:200])
         return self._check(self._json(r))
 
-    def get_episodes_all(self, series_id: int, window_size: int = 25) -> List[Dict]:
+    def get_episodes_all(self, series_id: int, window_size: int = 25) -> Dict[str, Any]:
         """회차 전체 수집.
+
+        반환: {'series_item': {...title, ...}, 'list': [...episodes]}
 
         카카오 BFF v2 패턴 (브라우저 트래픽 분석 결과):
           1) ANCHOR cursor_index=0 → last_view 주변 일부 반환
           2) PREV  (lst[0].cursor_index 기준 위쪽, 더 최신 회차)
           3) NEXT  (lst[-1].cursor_index 기준 아래쪽, 더 오래된 회차/트레일러)
-
-        cursor_direction 가 'AFTER' 등은 거부됨 → 위 3가지만 허용.
-        sort_type='desc' 가 PREV/NEXT 에 필요.
         """
         all_items: List[Dict] = []
         seen_pid = set()
+        series_item: Dict = {}
 
         def absorb(lst):
             new = 0
@@ -189,6 +189,7 @@ class KakaopageClient:
         except KakaopageError:
             raise
         res = body.get('result', {})
+        series_item = res.get('series_item') or {}
         lst = res.get('list') or []
         absorb(lst)
         anchor_first = lst[0].get('cursor_index') if lst else 0
@@ -240,7 +241,7 @@ class KakaopageClient:
             cur = new_cur
             time.sleep(0.3)
 
-        return all_items
+        return {'series_item': series_item, 'list': all_items}
 
     @staticmethod
     def extract_series_id(url_or_id: str) -> Optional[int]:

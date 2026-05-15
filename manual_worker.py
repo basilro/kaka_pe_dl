@@ -116,8 +116,10 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
         return {'ret': 'fail', 'msg': f'클라이언트 생성 실패: {e}'}
 
     try:
-        eps = cli.get_episodes_all(series_id)
-        P.logger.info('[manual] get_episodes_all → %d개', len(eps) if eps else 0)
+        data = cli.get_episodes_all(series_id)
+        eps = data.get('list') or []
+        series_item = data.get('series_item') or {}
+        P.logger.info('[manual] get_episodes_all → %d개', len(eps))
     except AuthRequiredError as e:
         P.logger.error('[manual] 회차 조회 권한 실패: %s', e)
         return {'ret': 'fail', 'msg': f'권한 만료 — 쿠키 재주입 필요: {e}'}
@@ -129,18 +131,14 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
     if not eps:
         return {'ret': 'fail', 'msg': '회차가 없습니다'}
 
-    # 시리즈 제목 추출 (회차 메타 첫 항목의 series_title 또는 series_simple_info)
-    first_item = eps[0]['item']
-    series_title = (first_item.get('series_title')
-                    or first_item.get('series_simple_info', {}).get('title')
-                    or f'series_{series_id}')
+    series_title = series_item.get('title') or f'series_{series_id}'
 
-    episodes = []
+    all_eps = []
     for x in eps:
         it = x['item']
         ep_no = KakaopageClient.episode_no_from_title(it.get('title', '')) or 0
         avail = KakaopageClient.episode_availability(it)
-        episodes.append({
+        all_eps.append({
             'product_id': it.get('product_id'),
             'episode_no': ep_no,
             'title': it.get('title', ''),
@@ -151,26 +149,27 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
             'save_dir': '',
             'error': '',
         })
+    # 다운로드 가능한 것만 (잠금/unknown 제외)
+    episodes = [e for e in all_eps if e['availability'] in ('free', 'owned', 'rented')]
     # 회차순 정렬
     episodes.sort(key=lambda e: (e['episode_no'], e['product_id'] or 0))
-
-    will_download = sum(1 for e in episodes if e['availability'] in ('free', 'owned', 'rented'))
+    will_download = len(episodes)
 
     _reset_state()
     _set(status='idle',
-         message=f'분석 완료 — {len(episodes)}개 회차 중 다운로드 가능 추정 {will_download}개',
+         message=f'분석 완료 — 전체 {len(all_eps)}개 중 다운로드 가능 {will_download}개',
          series_id=series_id, series_title=series_title,
          episodes=episodes, total_to_download=will_download)
 
     P.logger.info('[manual] analyze END series=%r total=%d will_download=%d',
-                  series_title, len(episodes), will_download)
+                  series_title, len(all_eps), will_download)
     return {
         'ret': 'success',
         'series_id': series_id,
         'series_title': series_title,
         'episodes': episodes,
         'will_download': will_download,
-        'total': len(episodes),
+        'total': len(all_eps),
     }
 
 
@@ -216,31 +215,30 @@ def start() -> Dict[str, Any]:
 
 
 def _run(download_root: str):
+    P.logger.info('[manual] _run BEGIN download_root=%r', download_root)
     try:
         cookies_json = (P.ModelSetting.get('cookies_json') or '').strip()
         cli = KakaopageClient(cookies_json, logger=P.logger)
         with _state_lock:
             series_id = _state['series_id']
             series_title = _state['series_title']
-            # working copy
-            episodes = _state['episodes']
+            episodes = list(_state['episodes'])
+        P.logger.info('[manual] _run series=%r episodes=%d', series_title, len(episodes))
 
         for idx, ep in enumerate(episodes):
             if _cancel_flag.is_set():
                 _set(status='canceled', finished_at=datetime.now().isoformat(),
                      message='취소됨')
+                P.logger.info('[manual] _run CANCELED at idx=%d', idx)
                 return
 
             _set(current_index=idx)
-
-            # 보유 추정 외엔 스킵
-            if ep['availability'] not in ('free', 'owned', 'rented'):
-                with _state_lock:
-                    _state['episodes'][idx]['state'] = 'skipped'
-                    _state['skipped'] += 1
-                continue
+            P.logger.info('[manual] _run [%d/%d] %s avail=%s pid=%s',
+                          idx + 1, len(episodes), ep.get('title'),
+                          ep.get('availability'), ep.get('product_id'))
 
             ok = _download_episode(cli, series_id, series_title, idx, ep, download_root)
+            P.logger.info('[manual] _run [%d/%d] result=%s', idx + 1, len(episodes), ok)
             with _state_lock:
                 if ok == 'completed':
                     _state['completed'] += 1
@@ -251,12 +249,14 @@ def _run(download_root: str):
 
         _set(status='done', finished_at=datetime.now().isoformat(),
              current_index=-1, message='완료')
+        P.logger.info('[manual] _run END')
     except AuthRequiredError as e:
+        P.logger.error('[manual] _run AuthRequired: %s', e)
         _set(status='error', finished_at=datetime.now().isoformat(),
              message=f'쿠키 만료/무효: {e}')
     except Exception as e:
-        logger.error('manual worker exception: %s', e)
-        logger.error(traceback.format_exc())
+        P.logger.error('[manual] _run exception: %s', e)
+        P.logger.error(traceback.format_exc())
         _set(status='error', finished_at=datetime.now().isoformat(),
              message=f'에러: {e}')
 
