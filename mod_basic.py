@@ -86,6 +86,23 @@ class ModuleBasic(PluginModuleBase):
                     'auto': auto_worker.get_auto_state(),
                     'manual': manual_worker.get_state(),
                 }
+            elif command == 'db_delete_items':
+                # arg1 = 콤마구분 id 문자열
+                ids = []
+                for x in (arg1 or '').split(','):
+                    x = x.strip()
+                    if x.isdigit():
+                        ids.append(int(x))
+                if not ids:
+                    ret = {'ret': 'fail', 'msg': '삭제할 ID 없음', 'count': 0}
+                else:
+                    cnt = (db.session.query(ModelKakaopageItem)
+                           .filter(ModelKakaopageItem.id.in_(ids))
+                           .delete(synchronize_session=False))
+                    db.session.commit()
+                    P.logger.info('[basic] db_delete_items: %d개 삭제 (요청 %d개)',
+                                  cnt, len(ids))
+                    ret = {'ret': 'success', 'count': cnt}
         except Exception as e:
             P.logger.error('[basic.process_command] inner Exception: %s', e)
             P.logger.error(traceback.format_exc())

@@ -14,23 +14,30 @@
             <option value="pending">대기</option>
           </select>
         </span>
-        <span class="col-md-8">
+        <span class="col-md-7">
           <input id="search_word" name="search_word" class="form-control form-control-sm w-75" type="text" placeholder="작품/회차 검색" aria-label="Search">
           <button id="search" class="btn btn-sm btn-outline-success">검색</button>
           <button id="reset_btn" class="btn btn-sm btn-outline-success">리셋</button>
         </span>
-        <span class="col-md-2"></span>
+        <span class="col-md-3" style="text-align:right;">
+          <button id="bulk_delete_btn" class="btn btn-sm btn-danger" disabled>
+            선택 삭제 (<span id="check_count">0</span>)
+          </button>
+        </span>
       </div>
     </div>
   </form>
   <div id='page1'></div>
   {{ macros.m_hr_head_top() }}
   {{ macros.m_row_start('0') }}
+  <div class="col-sm-1" style="text-align:center;">
+    <input type="checkbox" id="check_all" title="전체 선택"/>
+  </div>
   <div class="col-sm-3" style="text-align:center;"><strong>작품 / 회차</strong></div>
   <div class="col-sm-1" style="text-align:center;"><strong>장수/용량</strong></div>
   <div class="col-sm-1" style="text-align:center;"><strong>상태</strong></div>
   <div class="col-sm-2" style="text-align:center;"><strong>대여만료</strong></div>
-  <div class="col-sm-4" style="text-align:center;"><strong>받은시각 / 경로</strong></div>
+  <div class="col-sm-3" style="text-align:center;"><strong>받은시각 / 경로</strong></div>
   <div class="col-sm-1" style="text-align:center;"><strong>작업</strong></div>
   {{ macros.m_row_end() }}
   {{ macros.m_hr_head_bottom() }}
@@ -63,6 +70,9 @@ function make_list(data) {
   for (var i in data) {
     var item = data[i];
     str += '<div class="row" style="padding-top:4px; padding-bottom:4px; align-items:center;">';
+    str += '<div class="col-sm-1" style="text-align:center;">';
+    str +=   '<input type="checkbox" class="row-check" data-id="' + item.id + '"/>';
+    str += '</div>';
     str += '<div class="col-sm-3" style="word-break:break-all;">';
     str +=   '<strong>' + (item.series_title || '-') + '</strong><br/>';
     str +=   '<small>' + (item.episode_title || '-') + '</small>';
@@ -73,7 +83,7 @@ function make_list(data) {
     str += '</div>';
     str += '<div class="col-sm-1" style="text-align:center;">' + statusBadge(item.status) + '</div>';
     str += '<div class="col-sm-2" style="text-align:center;"><small>' + (item.rent_expire_dt || '-') + '</small></div>';
-    str += '<div class="col-sm-4" style="word-break:break-all;">';
+    str += '<div class="col-sm-3" style="word-break:break-all;">';
     str +=   '<small>' + (item.downloaded_at || '-') + '</small><br/>';
     str +=   '<small style="color:#888;">' + (item.save_dir || '') + '</small>';
     str += '</div>';
@@ -86,6 +96,15 @@ function make_list(data) {
   dataList = data;
   current_data = {list: data};
   document.getElementById("list_div").innerHTML = str;
+  // 새 list 그리면 헤더 체크박스/카운트 초기화
+  $('#check_all').prop('checked', false);
+  updateCheckCount();
+}
+
+function updateCheckCount() {
+  var n = $('.row-check:checked').length;
+  $('#check_count').text(n);
+  $('#bulk_delete_btn').prop('disabled', n === 0);
 }
 
 function request_search(page, move_top) {
@@ -127,6 +146,47 @@ $('body').on('click', '.del-btn', function(e){
       globalRequestSearch('1');
     } else {
       $.notify('삭제 실패', {className:'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className:'error'});
+  });
+});
+
+// 행별 체크박스 변경 → 카운트 업데이트
+$('body').on('change', '.row-check', function(){
+  updateCheckCount();
+  // 모든 행이 체크되면 헤더 체크도 켜기, 아니면 끄기
+  var total = $('.row-check').length;
+  var checked = $('.row-check:checked').length;
+  $('#check_all').prop('checked', total > 0 && total === checked);
+});
+
+// 헤더 전체 체크박스 → 모든 행 토글
+$('body').on('change', '#check_all', function(){
+  var v = this.checked;
+  $('.row-check').prop('checked', v);
+  updateCheckCount();
+});
+
+// 선택 삭제 버튼
+$('body').on('click', '#bulk_delete_btn', function(e){
+  e.preventDefault();
+  var ids = $('.row-check:checked').map(function(){
+    return $(this).data('id');
+  }).get();
+  if (ids.length === 0) {
+    $.notify('선택된 항목 없음', {className:'warn'});
+    return;
+  }
+  if (!confirm(ids.length + '개 회차 이력을 삭제하시겠습니까?\n(폴더의 파일은 그대로 남고 다음 다운 시 덮어씁니다)')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'db_delete_items', arg1: ids.join(',')},
+         function(ret){
+    if (ret && ret.ret === 'success') {
+      $.notify((ret.count || ids.length) + '개 삭제됨', {className:'success'});
+      globalRequestSearch('1');
+    } else {
+      $.notify('삭제 실패: ' + ((ret && ret.msg) || '?'), {className:'error'});
     }
   }).fail(function(xhr){
     $.notify('서버 호출 실패: ' + xhr.status, {className:'error'});
