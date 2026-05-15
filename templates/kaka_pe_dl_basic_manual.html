@@ -62,7 +62,7 @@ function renderEpisodes(eps, currentIdx){
   for (var i = 0; i < eps.length; i++){
     var e = eps[i];
     var pages = (e.pages_total ? (e.pages_done + '/' + e.pages_total) : '-');
-    var rowStyle = (i === currentIdx) ? ' style="background:#fff3cd;"' : '';
+    var rowStyle = (i === currentIdx) ? ' style="background:#fff3cd; color:#212529;"' : '';
     html += '<div class="row"' + rowStyle + ' style="padding:3px 0; border-bottom:1px solid #eee;">';
     html += '<div class="col-sm-1" style="text-align:center;">' + (e.episode_no || '-') + '</div>';
     html += '<div class="col-sm-5" style="word-break:break-all;"><small>' + (e.title || '-') + '</small></div>';
