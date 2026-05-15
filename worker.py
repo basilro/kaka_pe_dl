@@ -85,7 +85,8 @@ class Worker:
         for raw in self._split_items(self.cfg.get('titles_novel') or ''):
             self.items.append({'raw': raw, 'is_novel': True})
         self.max_per_run = int(self.cfg.get('max_per_run') or '1')
-        self.use_waitfree_only = (self.cfg.get('use_waitfree_only') or 'True') == 'True'
+        self.use_waitfree = (self.cfg.get('use_waitfree') or 'True') == 'True'
+        self.use_owned_rental = (self.cfg.get('use_owned_rental') or 'False') == 'True'
         self.client: Optional[KakaopageClient] = None
 
     @staticmethod
@@ -99,9 +100,9 @@ class Worker:
 
     # ---- public ----
     def run(self) -> dict:
-        P.logger.info('[basic] Worker.run BEGIN items=%s use_waitfree_only=%s max_per_run=%s',
+        P.logger.info('[basic] Worker.run BEGIN items=%s use_waitfree=%s use_owned_rental=%s max_per_run=%s',
                       [i['raw'] + (' (소설)' if i['is_novel'] else '') for i in self.items],
-                      self.use_waitfree_only, self.max_per_run)
+                      self.use_waitfree, self.use_owned_rental, self.max_per_run)
         _auto_reset()
         _auto_set(status='running', started_at=datetime.now().isoformat(),
                   message='시작', titles_total=len(self.items))
@@ -262,10 +263,14 @@ class Worker:
             if result == 'downloaded':
                 downloaded_count += 1
 
-        # 2) 잠금 회차 — 기다무/보유 이용권 차감 후 다운
+        # 2) 잠금 회차 — 기다무/일반 대여권 옵션에 따라 처리
         #    기다무: 보통 1장씩 충전되므로 max_per_run 한도 적용
         #    일반(보유) 대여권: 잔량(ticket_own_count)까지 모두 사용
-        if locked:
+        #    두 옵션 모두 Off면 잠금 회차 자체를 스킵
+        if locked and not (self.use_waitfree or self.use_owned_rental):
+            P.logger.info('[%s] 대여권 사용 모두 Off — 잠금 회차 %d개 스킵 (무료/소장만 다운)',
+                          title, len(locked))
+        elif locked:
             _auto_set(current_phase='check_ticket')
             tm = self.client.get_ticket_my(series_id)
             wf = tm.get('waitfree') or {}
@@ -277,20 +282,26 @@ class Worker:
                 wf_ready = bool(wf.get('charged_complete'))
                 own_left = int(my.get('ticket_own_count') or 0)
 
-                can_use_wf = wf_ready and (waitfree_used < self.max_per_run)
-                can_use_own = (not self.use_waitfree_only) and (own_left > 0)
+                can_use_wf = self.use_waitfree and wf_ready and (waitfree_used < self.max_per_run)
+                can_use_own = self.use_owned_rental and (own_left > 0)
 
                 if not (can_use_wf or can_use_own):
-                    if self.use_waitfree_only:
-                        if wf_ready and waitfree_used >= self.max_per_run:
-                            P.logger.info('[%s] 기다무 max_per_run(%d) 도달 — 종료',
-                                          title, self.max_per_run)
-                        else:
-                            P.logger.info('[%s] 기다무 미충전 — 종료 (충전 예정: %s)',
-                                          title, wf.get('charged_at'))
+                    # 사유 분기 로깅
+                    reasons = []
+                    if self.use_waitfree:
+                        if not wf_ready:
+                            reasons.append(f'기다무 미충전(예정 {wf.get("charged_at")})')
+                        elif waitfree_used >= self.max_per_run:
+                            reasons.append(f'기다무 max_per_run({self.max_per_run}) 도달')
                     else:
-                        P.logger.info('[%s] 사용 가능 이용권 없음 (기다무 미충전, 일반 잔량 0) — 종료',
-                                      title)
+                        reasons.append('기다무 사용 Off')
+                    if self.use_owned_rental:
+                        if own_left <= 0:
+                            reasons.append('일반 잔량 0')
+                    else:
+                        reasons.append('일반 사용 Off')
+                    P.logger.info('[%s] 사용 가능 이용권 없음 — 종료 (%s)',
+                                  title, ' / '.join(reasons))
                     break
 
                 _auto_set(current_phase='downloading',
@@ -385,31 +396,27 @@ class Worker:
                 P.logger.info('[%s] %s ready_to_use available=%s',
                               series_title, episode_title, available)
 
-            # ticket_type 우선순위 결정:
-            #   use_waitfree_only=True   → RT05만
-            #   Off + wf_charged=True    → RT05 우선, 실패 시 추천 type fallback
-            #   Off + wf_charged=False   → 추천 type 우선(일반), 실패 시 RT05 시도
-            #   Off + wf_charged=None    → 보수적으로 RT05 → 추천
-            if self.use_waitfree_only:
-                if rec_type and rec_type != 'RT05':
-                    P.logger.info('[%s] %s use_waitfree_only — 카카오 추천(%s) 무시, RT05 강제',
-                                  series_title, episode_title, rec_type)
-                tries = ['RT05']
-            else:
-                tries = []
-                if wf_charged is False:
-                    # 기다무 미충전 — 일반 대여권 먼저
-                    if rec_type:
-                        tries.append(rec_type)
-                    if 'RT05' not in tries:
-                        tries.append('RT05')
-                    P.logger.info('[%s] %s 기다무 미충전 — 일반 우선 (tries=%s)',
-                                  series_title, episode_title, tries)
-                else:
-                    # 기다무 충전됨 또는 모름 — RT05 우선
-                    tries.append('RT05')
-                    if rec_type and rec_type != 'RT05':
-                        tries.append(rec_type)
+            # ticket_type 우선순위 결정 (use_waitfree / use_owned_rental 옵션 기반)
+            tries: List[str] = []
+            # 1. 기다무 사용 가능 + 충전됨 → RT05 우선
+            if self.use_waitfree and wf_charged is not False:
+                tries.append('RT05')
+            # 2. 일반 대여권 사용 가능 → 카카오 추천 type
+            if self.use_owned_rental and rec_type and rec_type not in tries:
+                tries.append(rec_type)
+            # 3. 보완: use_waitfree=True 인데 wf 미충전 등으로 위에서 RT05 빠진 경우
+            #    fallback으로라도 한 번 시도 (use_owned_rental이 다 실패했을 때 마지막 보루)
+            if self.use_waitfree and 'RT05' not in tries:
+                tries.append('RT05')
+            if not tries:
+                # 두 옵션 모두 Off — 호출자가 미리 걸러야 함 (방어적)
+                P.logger.info('[%s] %s 대여권 사용 옵션 모두 Off — 스킵',
+                              series_title, episode_title)
+                rec.status = 'skipped_no_ticket'; db.session.commit()
+                return 'skipped'
+            P.logger.info('[%s] %s ticket 시도 순서: %s (use_wf=%s, use_own=%s, wf_charged=%s)',
+                          series_title, episode_title, tries,
+                          self.use_waitfree, self.use_owned_rental, wf_charged)
 
             used = None
             last_err = None
