@@ -27,10 +27,11 @@
   {{ macros.m_hr_head_top() }}
   {{ macros.m_row_start('0') }}
   <div class="col-sm-3" style="text-align:center;"><strong>작품 / 회차</strong></div>
-  <div class="col-sm-2" style="text-align:center;"><strong>장수 / 용량</strong></div>
-  <div class="col-sm-2" style="text-align:center;"><strong>상태</strong></div>
+  <div class="col-sm-1" style="text-align:center;"><strong>장수/용량</strong></div>
+  <div class="col-sm-1" style="text-align:center;"><strong>상태</strong></div>
   <div class="col-sm-2" style="text-align:center;"><strong>대여만료</strong></div>
-  <div class="col-sm-3" style="text-align:center;"><strong>받은시각 / 경로</strong></div>
+  <div class="col-sm-4" style="text-align:center;"><strong>받은시각 / 경로</strong></div>
+  <div class="col-sm-1" style="text-align:center;"><strong>작업</strong></div>
   {{ macros.m_row_end() }}
   {{ macros.m_hr_head_bottom() }}
   <div id="list_div"></div>
@@ -66,20 +67,24 @@ function make_list(data) {
     str +=   '<strong>' + (item.series_title || '-') + '</strong><br/>';
     str +=   '<small>' + (item.episode_title || '-') + '</small>';
     str += '</div>';
-    str += '<div class="col-sm-2" style="text-align:center;">';
-    str +=   (item.downloaded_count || 0) + ' / ' + (item.page_count || '?') + '<br/>';
+    str += '<div class="col-sm-1" style="text-align:center;">';
+    str +=   (item.downloaded_count || 0) + '/' + (item.page_count || '?') + '<br/>';
     str +=   '<small>' + fmtBytes(item.total_bytes) + '</small>';
     str += '</div>';
-    str += '<div class="col-sm-2" style="text-align:center;">' + statusBadge(item.status) + '</div>';
+    str += '<div class="col-sm-1" style="text-align:center;">' + statusBadge(item.status) + '</div>';
     str += '<div class="col-sm-2" style="text-align:center;"><small>' + (item.rent_expire_dt || '-') + '</small></div>';
-    str += '<div class="col-sm-3" style="word-break:break-all;">';
+    str += '<div class="col-sm-4" style="word-break:break-all;">';
     str +=   '<small>' + (item.downloaded_at || '-') + '</small><br/>';
     str +=   '<small style="color:#888;">' + (item.save_dir || '') + '</small>';
+    str += '</div>';
+    str += '<div class="col-sm-1" style="text-align:center;">';
+    str +=   '<button class="btn btn-sm btn-outline-danger del-btn" data-id="' + item.id + '">삭제</button>';
     str += '</div>';
     str += '</div>';
     if (i != data.length - 1) str += '<hr style="width:100%; margin:5px;" />';
   }
   dataList = data;
+  current_data = {list: data};
   document.getElementById("list_div").innerHTML = str;
 }
 
@@ -108,6 +113,24 @@ $("#reset_btn").click(function(e) {
   document.getElementById("search_word").value = '';
   document.getElementById("option").value = 'all';
   globalRequestSearch("1");
+});
+
+$('body').on('click', '.del-btn', function(e){
+  e.preventDefault();
+  var id = $(this).data('id');
+  if (!confirm('이 회차 이력을 삭제하시겠습니까?\n다음 다운로드 시 다시 받게 됩니다.\n(폴더의 파일은 그대로 남고 새 다운로드가 덮어씁니다)')) return;
+  $.post('/' + package_name + '/ajax/basic/db_delete_item',
+         {db_id: id},
+         function(ret){
+    if (ret) {
+      $.notify('삭제됨 — 다음 다운 시 재다운로드', {className:'success'});
+      globalRequestSearch('1');
+    } else {
+      $.notify('삭제 실패', {className:'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className:'error'});
+  });
 });
 </script>
 {% endblock %}
