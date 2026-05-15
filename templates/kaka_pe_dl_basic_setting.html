@@ -47,9 +47,13 @@
             desc=['기다무(자동 충전) 대여권 사용 한도. 보통 1장씩 충전되므로 1.',
                   '※ 일반 보유 대여권은 이 값과 무관하게 잔량 전부 사용됨.']) }}
 
-        {{ macros.setting_checkbox('use_waitfree_only', '기다무 대여권만 사용',
-            value=arg['use_waitfree_only'],
-            desc='On: 기다무가 충전된 작품만 다운로드 (보유 이용권/캐시 안 씀). Off: 보유 대여권 잔량까지 모두 사용.') }}
+        {{ macros.setting_checkbox('use_waitfree', '기다무 대여권 사용',
+            value=arg['use_waitfree'],
+            desc='On: 기다무가 충전된 회차에 기다무 대여권 사용.') }}
+
+        {{ macros.setting_checkbox('use_owned_rental', '일반(보유) 대여권 사용',
+            value=arg['use_owned_rental'],
+            desc='On: 보유한 일반 대여권 잔량까지 모두 사용. 둘 다 Off면 잠금 회차는 스킵하고 무료/소장만 다운.') }}
 
         {{ macros.setting_buttons([['globalDbDeleteBtn', '이력 초기화']], 'DB 정리') }}
       {{ macros.m_tab_content_end() }}
