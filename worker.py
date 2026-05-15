@@ -175,7 +175,7 @@ class Worker:
         sid = KakaopageClient.extract_series_id(raw)
         if sid:
             series_id = sid
-            display_title = raw
+            display_title = raw  # 임시 — _process_series에서 실제 제목으로 덮어씀
             P.logger.info('[%s] [%s] series_id 직접: %s', kind_label, raw, series_id)
         else:
             # 2) 제목 → 검색
@@ -187,20 +187,47 @@ class Worker:
                 P.logger.warning('[%s] [%s] 검색 결과 매칭 실패', kind_label, raw)
                 return 'failed'
             series_id = series['series_id']
-            display_title = raw
-            P.logger.info('[%s] [%s] 검색→ series_id=%s', kind_label, raw, series_id)
+            display_title = series.get('title') or raw
+            P.logger.info('[%s] [%s] 검색→ series_id=%s title=%r',
+                          kind_label, raw, series_id, display_title)
 
         return self._process_series(display_title, series_id, is_novel)
 
     def _process_series(self, title: str, series_id: int, is_novel: bool) -> str:
 
-        # 회차 목록
+        # 회차 목록 — 첫 ANCHOR 응답 직후 즉시 series 제목으로 화면 갱신 (PREV/NEXT 페이징은 길 수 있음)
         _auto_set(current_phase='fetch_episodes')
-        data = self.client.get_episodes_all(series_id)
+
+        title_holder = {'t': title}
+
+        def _on_series(meta):
+            nm = (meta or {}).get('title')
+            if nm and nm != title_holder['t']:
+                P.logger.info('[%s] series 제목 확보 → %r (즉시 갱신)', title_holder['t'], nm)
+                title_holder['t'] = nm
+                _auto_set(current_title=nm + (' [소설]' if is_novel else ''))
+
+        data = self.client.get_episodes_all(series_id, on_series_item=_on_series)
         eps = (data.get('list') if isinstance(data, dict) else data) or []
         if not eps:
-            P.logger.warning('[%s] 회차 목록 비어있음', title)
+            P.logger.warning('[%s] 회차 목록 비어있음', title_holder['t'])
             return 'failed'
+
+        # 폴백: callback 못 탔거나 series_item 비어있을 때 episode item 안에서도 찾아봄
+        if title_holder['t'] == title:
+            series_meta = data.get('series_item') if isinstance(data, dict) else None
+            meta_title = (series_meta or {}).get('title')
+            if not meta_title:
+                # episode item에 series_title 들어있는 경우도 있음
+                first_it = eps[0].get('item') if eps else None
+                if first_it:
+                    meta_title = first_it.get('series_title') or first_it.get('seriesTitle')
+            if meta_title and meta_title != title_holder['t']:
+                P.logger.info('[%s] series 제목 폴백 → %r', title_holder['t'], meta_title)
+                title_holder['t'] = meta_title
+                _auto_set(current_title=meta_title + (' [소설]' if is_novel else ''))
+
+        title = title_holder['t']
 
         # 분류: 받지 않은 회차들 → free/owned/rented(직접) vs locked(기다무 ticket 필요)
         free_owned: List = []   # (item, availability)
@@ -235,45 +262,73 @@ class Worker:
             if result == 'downloaded':
                 downloaded_count += 1
 
-        # 2) 잠금 회차 — 기다무/보유 이용권 차감 후 다운 (max_per_run 만큼)
+        # 2) 잠금 회차 — 기다무/보유 이용권 차감 후 다운
+        #    기다무: 보통 1장씩 충전되므로 max_per_run 한도 적용
+        #    일반(보유) 대여권: 잔량(ticket_own_count)까지 모두 사용
         if locked:
             _auto_set(current_phase='check_ticket')
             tm = self.client.get_ticket_my(series_id)
             wf = tm.get('waitfree') or {}
             my = tm.get('my') or {}
 
-            ticket_used = 0
+            waitfree_used = 0
+            own_used = 0
             for it, _ in locked:
-                if ticket_used >= self.max_per_run:
-                    P.logger.info('[%s] max_per_run(%d) 도달', title, self.max_per_run)
-                    break
+                wf_ready = bool(wf.get('charged_complete'))
+                own_left = int(my.get('ticket_own_count') or 0)
 
-                if self.use_waitfree_only:
-                    if not wf.get('charged_complete'):
-                        P.logger.info('[%s] 기다무 미충전 — 잠금 회차 다운 종료 (충전 예정: %s)',
-                                      title, wf.get('charged_at'))
-                        break
-                else:
-                    if not (wf.get('charged_complete') or my.get('ticket_own_count', 0) > 0):
-                        P.logger.info('[%s] 사용 가능한 이용권 없음 — 종료', title)
-                        break
+                can_use_wf = wf_ready and (waitfree_used < self.max_per_run)
+                can_use_own = (not self.use_waitfree_only) and (own_left > 0)
+
+                if not (can_use_wf or can_use_own):
+                    if self.use_waitfree_only:
+                        if wf_ready and waitfree_used >= self.max_per_run:
+                            P.logger.info('[%s] 기다무 max_per_run(%d) 도달 — 종료',
+                                          title, self.max_per_run)
+                        else:
+                            P.logger.info('[%s] 기다무 미충전 — 종료 (충전 예정: %s)',
+                                          title, wf.get('charged_at'))
+                    else:
+                        P.logger.info('[%s] 사용 가능 이용권 없음 (기다무 미충전, 일반 잔량 0) — 종료',
+                                      title)
+                    break
 
                 _auto_set(current_phase='downloading',
                           current_episode=it.get('title', ''),
                           current_pages_done=0, current_pages_total=0)
                 result = self._download_one(title, series_id, it, 'locked')
-                if result == 'downloaded':
-                    downloaded_count += 1
-                    ticket_used += 1
-                    # ticket 상태 갱신
-                    _auto_set(current_phase='check_ticket')
-                    tm = self.client.get_ticket_my(series_id)
-                    wf = tm.get('waitfree') or {}
-                    my = tm.get('my') or {}
-                else:
-                    # 실패 시 추가 ticket 시도 안 함
+                if result != 'downloaded':
                     P.logger.info('[%s] 잠금 회차 다운 실패/스킵 — 종료', title)
                     break
+
+                downloaded_count += 1
+                # ticket 상태 갱신 + 어느 쪽 ticket이 줄었는지 추적
+                _auto_set(current_phase='check_ticket')
+                tm2 = self.client.get_ticket_my(series_id)
+                wf2 = tm2.get('waitfree') or {}
+                my2 = tm2.get('my') or {}
+                new_wf_ready = bool(wf2.get('charged_complete'))
+                new_own = int(my2.get('ticket_own_count') or 0)
+
+                if wf_ready and not new_wf_ready:
+                    waitfree_used += 1
+                    P.logger.info('[%s] 기다무 1장 사용 (누적 %d/%d, 일반 잔량 %d)',
+                                  title, waitfree_used, self.max_per_run, new_own)
+                elif new_own < own_left:
+                    own_used += 1
+                    P.logger.info('[%s] 일반 대여권 1장 사용 (누적 %d, 일반 잔량 %d, 기다무 충전 %s)',
+                                  title, own_used, new_own, new_wf_ready)
+                else:
+                    # 잔량 변화 못 잡힘 — 기다무 우선 추정
+                    if wf_ready:
+                        waitfree_used += 1
+                    else:
+                        own_used += 1
+                    P.logger.info('[%s] ticket 사용 (추정) — 기다무 누적 %d, 일반 누적 %d',
+                                  title, waitfree_used, own_used)
+
+                wf = wf2
+                my = my2
 
         return 'downloaded' if downloaded_count else 'skipped'
 
@@ -311,21 +366,54 @@ class Worker:
             except KakaopageError as e:
                 rec.status = 'failed'; rec.error_msg = f'ready_to_use: {e}'
                 db.session.commit(); return 'failed'
-            ticket_rental_type = (ready.get('available') or {}).get('ticket_rental_type')
-            if not ticket_rental_type:
-                P.logger.info('[%s] %s 사용 가능 ticket 없음 — 스킵',
-                              series_title, episode_title)
-                rec.status = 'skipped_no_ticket'; db.session.commit(); return 'skipped'
-            try:
-                used = self.client.use_ticket(product_id, ticket_type=ticket_rental_type)
-            except KakaopageError as e:
-                rec.status = 'failed'; rec.error_msg = f'use_ticket: {e}'
-                db.session.commit(); return 'failed'
+            available = ready.get('available') or {}
+            rec_type = available.get('ticket_rental_type')
+            P.logger.info('[%s] %s ready_to_use available=%s',
+                          series_title, episode_title, available)
+
+            # ticket_type 결정:
+            #   use_waitfree_only=True  → RT05(기다무) 강제 (카카오 추천이 일반이어도 무시)
+            #   use_waitfree_only=False → 기다무 우선 시도(RT05), 실패 시 추천(일반) fallback
+            if self.use_waitfree_only:
+                if rec_type and rec_type != 'RT05':
+                    P.logger.info('[%s] %s use_waitfree_only — 카카오 추천(%s) 무시, RT05 강제',
+                                  series_title, episode_title, rec_type)
+                tries = ['RT05']
+            else:
+                tries = ['RT05']
+                if rec_type and rec_type != 'RT05':
+                    tries.append(rec_type)
+
+            used = None
+            last_err = None
+            tried_types = []
+            for tt in tries:
+                tried_types.append(tt)
+                try:
+                    used = self.client.use_ticket(product_id, ticket_type=tt)
+                    P.logger.info('[%s] %s use_ticket(%s) 성공',
+                                  series_title, episode_title, tt)
+                    break
+                except KakaopageError as e:
+                    last_err = e
+                    P.logger.info('[%s] %s use_ticket(%s) 실패: %s',
+                                  series_title, episode_title, tt, e)
+
+            if used is None:
+                # 사용 가능 ticket 없음 — 스킵 (use_waitfree_only면 의도대로 기다무 미충전)
+                rec.status = 'skipped_no_ticket'
+                rec.error_msg = f'use_ticket {tried_types} 모두 실패: {last_err}'
+                db.session.commit()
+                P.logger.info('[%s] %s ticket 사용 불가 — 스킵 (tried=%s)',
+                              series_title, episode_title, tried_types)
+                return 'skipped'
+
+            ticket_used_type = tried_types[-1]
             rec.ticket_uid = used.get('ticket_uid')
             rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
             db.session.commit()
             P.logger.info('[%s] %s ticket 차감 OK (type=%s uid=%s expire=%s)',
-                          series_title, episode_title, ticket_rental_type,
+                          series_title, episode_title, ticket_used_type,
                           rec.ticket_uid, rec.rent_expire_dt)
             try:
                 self.client.open_page(series_id, product_id, rec.ticket_uid or '')
@@ -344,17 +432,17 @@ class Worker:
         viewer_data = vd.get('viewerData') or {}
         viewer_type = viewer_data.get('type') or ''
 
-        # 저장 폴더 (공통)
+        # 저장 경로 — 소설은 작품폴더 직속 .txt, 웹툰은 작품폴더/회차폴더/이미지들
         s_folder = _safe_filename(series_title)
-        e_folder = f'{ep_no:04d}_{_safe_filename(episode_title)}'
-        save_dir = os.path.join(self.download_root, s_folder, e_folder)
-        os.makedirs(save_dir, exist_ok=True)
-        rec.save_dir = save_dir
-        rec.status = 'downloading'
-        db.session.commit()
+        series_dir = os.path.join(self.download_root, s_folder)
 
-        # === 소설 (TextViewerData) ===
+        # === 소설 (TextViewerData) — 회차 폴더 없이 NNNN_제목.txt ===
         if viewer_type == 'TextViewerData':
+            os.makedirs(series_dir, exist_ok=True)
+            rec.save_dir = series_dir
+            rec.status = 'downloading'
+            db.session.commit()
+
             ats = viewer_data.get('atsServerUrl') or ''
             contents = viewer_data.get('contentsList') or []
             if not contents:
@@ -381,15 +469,23 @@ class Worker:
                 rec.status = 'failed'; rec.error_msg = 'no text extracted'
                 db.session.commit(); return 'failed'
 
-            save_path = os.path.join(save_dir, f'{ep_no:04d}.txt')
+            fname = f'{ep_no:04d}_{_safe_filename(episode_title)}.txt'
+            save_path = os.path.join(series_dir, fname)
             with open(save_path, 'w', encoding='utf-8') as f:
                 f.write('\n\n'.join(paragraphs))
             total_bytes = os.path.getsize(save_path)
             downloaded = done
             files_count = len(contents)
             failed = []
-        # === 웹툰 (이미지) ===
+        # === 웹툰 (이미지) — 회차폴더 안에 페이지별 이미지 ===
         else:
+            e_folder = f'{ep_no:04d}_{_safe_filename(episode_title)}'
+            save_dir = os.path.join(series_dir, e_folder)
+            os.makedirs(save_dir, exist_ok=True)
+            rec.save_dir = save_dir
+            rec.status = 'downloading'
+            db.session.commit()
+
             files = (viewer_data.get('imageDownloadData') or {}).get('files') or []
             if not files:
                 rec.status = 'failed'; rec.error_msg = f'no image files in viewer_data (type={viewer_type})'
