@@ -10,6 +10,7 @@
   <nav>
     {{ macros.m_tab_head_start() }}
       {{ macros.m_tab_head('normal', '일반', true) }}
+      {{ macros.m_tab_head('notify', '알림', false) }}
       {{ macros.m_tab_head('auto', '자동', false) }}
     {{ macros.m_tab_head_end() }}
   </nav>
@@ -58,6 +59,34 @@
         {{ macros.setting_buttons([['globalDbDeleteBtn', '이력 초기화']], 'DB 정리') }}
       {{ macros.m_tab_content_end() }}
 
+      {{ macros.m_tab_content_start('notify', false) }}
+        <div style="padding:6px 0 14px; color:#666;">
+          웹훅 URL 입력 시에만 알림 발송. <strong>Discord 웹훅</strong>을 기본 대상으로 하며,
+          Slack 웹훅 URL 도 자동 인식합니다. 빈 칸이면 해당 알림은 보내지 않습니다.
+          <br/><small>Discord 웹훅 URL 형식 예: <code>https://discord.com/api/webhooks/{ID}/{TOKEN}</code></small>
+        </div>
+
+        {{ macros.setting_input_text_and_buttons('notify_webhook_cookie', '쿠키 만료 알림 URL',
+            [['notifyTestCookieBtn', '테스트']],
+            value=arg['notify_webhook_cookie'],
+            desc=['카카오 쿠키 만료 감지 시 1회 발송 (복구되면 다음 만료 때 다시 1회).',
+                  '비우면 알림 OFF.']) }}
+
+        {{ macros.setting_input_text_and_buttons('notify_webhook_download', '웹툰 다운로드 완료 알림 URL',
+            [['notifyTestDownloadBtn', '테스트']],
+            value=arg['notify_webhook_download'],
+            desc=['자동 실행이 끝나고 웹툰을 받은 게 있을 때 요약 메시지 발송.',
+                  '받은 회차가 없으면 알림 안 보냄.',
+                  '비우면 알림 OFF.']) }}
+
+        {{ macros.setting_input_text_and_buttons('notify_webhook_download_novel', '소설 다운로드 완료 알림 URL',
+            [['notifyTestDownloadNovelBtn', '테스트']],
+            value=arg['notify_webhook_download_novel'],
+            desc=['자동 실행이 끝나고 소설을 받은 게 있을 때 요약 메시지 발송.',
+                  '받은 회차가 없으면 알림 안 보냄.',
+                  '비우면 알림 OFF.']) }}
+      {{ macros.m_tab_content_end() }}
+
       {{ macros.m_tab_content_start('auto', false) }}
         {{ macros.global_setting_scheduler_button(arg['is_include'], arg['is_running']) }}
         {{ macros.setting_input_text('basic_interval', '스케쥴링 실행 정보',
@@ -92,5 +121,22 @@ $('body').on('click', '#verifyCookiesBtn', function(e){
     else { $.notify(data.msg || '쿠키 검증 실패', {className: 'error'}); }
   });
 });
+
+function _notifyTest(kind){
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'notify_test', arg1: kind},
+         function(data){
+    if(data && data.ret === 'success'){
+      $.notify(data.msg || '발송 성공', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '발송 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+}
+$('body').on('click', '#notifyTestCookieBtn',       function(e){ e.preventDefault(); _notifyTest('cookie'); });
+$('body').on('click', '#notifyTestDownloadBtn',     function(e){ e.preventDefault(); _notifyTest('download'); });
+$('body').on('click', '#notifyTestDownloadNovelBtn',function(e){ e.preventDefault(); _notifyTest('download_novel'); });
 </script>
 {% endblock %}
