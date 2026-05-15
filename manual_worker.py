@@ -315,7 +315,8 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
     viewer_type = viewer_data.get('type') or ''
 
     s_folder = _safe_filename(series_title)
-    series_dir = os.path.join(download_root, s_folder)
+    kind_dir = 'novel' if viewer_type == 'TextViewerData' else 'webtoon'
+    series_dir = os.path.join(download_root, kind_dir, s_folder)
 
     # === 소설 (TextViewerData) — 회차 폴더 없이 작품폴더 직속 NNNN_제목.txt ===
     if viewer_type == 'TextViewerData':

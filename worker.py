@@ -517,9 +517,10 @@ class Worker:
         viewer_data = vd.get('viewerData') or {}
         viewer_type = viewer_data.get('type') or ''
 
-        # 저장 경로 — 소설은 작품폴더 직속 .txt, 웹툰은 작품폴더/회차폴더/이미지들
+        # 저장 경로 — download_root/<webtoon|novel>/<작품>/...
         s_folder = _safe_filename(series_title)
-        series_dir = os.path.join(self.download_root, s_folder)
+        kind_dir = 'novel' if viewer_type == 'TextViewerData' else 'webtoon'
+        series_dir = os.path.join(self.download_root, kind_dir, s_folder)
 
         # === 소설 (TextViewerData) — 회차 폴더 없이 NNNN_제목.txt ===
         if viewer_type == 'TextViewerData':
