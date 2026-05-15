@@ -157,10 +157,14 @@ class KakaopageClient:
                   phase, r.status_code, r.text[:200])
         return self._check(self._json(r))
 
-    def get_episodes_all(self, series_id: int, window_size: int = 25) -> Dict[str, Any]:
+    def get_episodes_all(self, series_id: int, window_size: int = 25,
+                         on_series_item=None) -> Dict[str, Any]:
         """회차 전체 수집.
 
         반환: {'series_item': {...title, ...}, 'list': [...episodes]}
+
+        on_series_item: 첫 ANCHOR 응답에서 series_item 확보 즉시 호출되는 callback
+                        (PREV/NEXT 페이징이 끝나기 전에 UI 갱신할 수 있게).
 
         카카오 BFF v2 패턴 (브라우저 트래픽 분석 결과):
           1) ANCHOR cursor_index=0 → last_view 주변 일부 반환
@@ -192,6 +196,12 @@ class KakaopageClient:
         series_item = res.get('series_item') or {}
         lst = res.get('list') or []
         absorb(lst)
+        # 첫 ANCHOR 응답 직후 즉시 콜백 (PREV/NEXT 끝나기 전에 UI 갱신용)
+        if on_series_item and series_item:
+            try:
+                on_series_item(series_item)
+            except Exception as cb_e:
+                self._log('warning', 'on_series_item callback 예외: %s', cb_e)
         anchor_first = lst[0].get('cursor_index') if lst else 0
         anchor_last = lst[-1].get('cursor_index') if lst else 0
         has_prev = bool(res.get('has_prev'))
