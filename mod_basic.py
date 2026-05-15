@@ -99,8 +99,9 @@ class ModuleBasic(PluginModuleBase):
 
     def do_action(self):
         try:
-            w = Worker()
-            return w.run()
+            with F.app.app_context():
+                w = Worker()
+                return w.run()
         except Exception as e:
             logger.error('Exception: %s', e)
             logger.error(traceback.format_exc())
