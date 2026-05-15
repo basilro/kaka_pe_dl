@@ -359,7 +359,14 @@ class KakaopageClient:
         s = self._session()
         r = s.get(f'{BFF}/api/gateway/api/v1/ticket/my',
                   params={'series_id': series_id, 'include_waitfree': 'true'}, timeout=15)
-        return self._check(self._json(r)).get('result', {})
+        result = self._check(self._json(r)).get('result', {})
+        # 일반 대여권 잔량 필드를 정확히 모르므로 응답 전체를 한 번 찍음 (필드 확인용)
+        try:
+            self._log('info', 'ticket/my result(series=%s): %s',
+                      series_id, json.dumps(result, ensure_ascii=False)[:1500])
+        except Exception:
+            pass
+        return result
 
     def ready_to_use(self, product_id: int) -> Dict:
         s = self._session()

@@ -16,6 +16,54 @@ def _safe_filename(s: str) -> str:
     return s.strip().strip('.')
 
 
+def _extract_own_ticket_count(tm: Dict[str, Any]) -> int:
+    """ticket/my 응답에서 일반(보유) 대여권 잔량 추출.
+
+    카카오 BFF 응답 필드를 정확히 모르므로 알려진 후보 키들을 차례로 검사.
+    """
+    if not isinstance(tm, dict):
+        return 0
+    candidates: List[Any] = []
+
+    # 1) result.my.* 의 알려진 키들
+    my = tm.get('my') or {}
+    if isinstance(my, dict):
+        for k in ('ticket_own_count', 'ticket_rent_count', 'rental_ticket_count',
+                  'rent_ticket_count', 'own_count', 'count', 'rental_count'):
+            v = my.get(k)
+            if v is not None:
+                candidates.append((f'my.{k}', v))
+
+    # 2) result.* (top-level) 후보
+    for k in ('rental_ticket_count', 'rent_ticket_count', 'own_ticket_count',
+              'ticket_rent_count', 'ticket_own_count'):
+        v = tm.get(k)
+        if v is not None:
+            candidates.append((k, v))
+
+    # 3) tickets/rental_tickets 같은 리스트
+    for outer_key in ('tickets', 'rental_tickets', 'rental', 'my_tickets',
+                      'rental_ticket'):
+        outer = tm.get(outer_key)
+        if isinstance(outer, list):
+            candidates.append((f'{outer_key}[len]', len(outer)))
+        elif isinstance(outer, dict):
+            for k in ('count', 'total', 'remain', 'total_count'):
+                v = outer.get(k)
+                if v is not None:
+                    candidates.append((f'{outer_key}.{k}', v))
+
+    # 양수 후보 우선, 없으면 0
+    for src, v in candidates:
+        try:
+            n = int(v)
+            if n > 0:
+                return n
+        except Exception:
+            continue
+    return 0
+
+
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
@@ -280,7 +328,7 @@ class Worker:
             own_used = 0
             for it, _ in locked:
                 wf_ready = bool(wf.get('charged_complete'))
-                own_left = int(my.get('ticket_own_count') or 0)
+                own_left = _extract_own_ticket_count(tm)
 
                 can_use_wf = self.use_waitfree and wf_ready and (waitfree_used < self.max_per_run)
                 can_use_own = self.use_owned_rental and (own_left > 0)
@@ -320,7 +368,7 @@ class Worker:
                 wf2 = tm2.get('waitfree') or {}
                 my2 = tm2.get('my') or {}
                 new_wf_ready = bool(wf2.get('charged_complete'))
-                new_own = int(my2.get('ticket_own_count') or 0)
+                new_own = _extract_own_ticket_count(tm2)
 
                 if wf_ready and not new_wf_ready:
                     waitfree_used += 1
