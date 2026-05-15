@@ -8,6 +8,8 @@ from urllib.parse import unquote as urlparse_unquote
 
 from .client import KakaopageClient, KakaopageError, AuthRequiredError, NotPurchasedError
 from .model import ModelKakaopageItem
+from .notify import (send_webhook, build_download_summary,
+                     build_cookie_expired_message)
 from .setup import *  # P, db, logger
 
 
@@ -137,7 +139,13 @@ class Worker:
         self.max_per_run = int(self.cfg.get('max_per_run') or '1')
         self.use_waitfree = (self.cfg.get('use_waitfree') or 'True') == 'True'
         self.use_owned_rental = (self.cfg.get('use_owned_rental') or 'False') == 'True'
+        self.notify_cookie_url = (self.cfg.get('notify_webhook_cookie') or '').strip()
+        self.notify_download_url = (self.cfg.get('notify_webhook_download') or '').strip()
+        self.notify_download_novel_url = (self.cfg.get('notify_webhook_download_novel') or '').strip()
         self.client: Optional[KakaopageClient] = None
+        # 알림용 누적 — 웹툰/소설 분리
+        self.completed_webtoon: List[Dict[str, Any]] = []
+        self.completed_novel: List[Dict[str, Any]] = []
 
     @staticmethod
     def _split_items(raw: str) -> List[str]:
@@ -184,7 +192,23 @@ class Worker:
             P.logger.error('쿠키 만료 — 재주입 필요')
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='쿠키 만료 — 재주입 필요')
+            # 만료 알림 — 1회만 발송 (스팸 방지)
+            try:
+                already = (P.ModelSetting.get('cookie_expired_notified') or 'False') == 'True'
+                if not already and self.notify_cookie_url:
+                    if send_webhook(self.notify_cookie_url,
+                                    build_cookie_expired_message()):
+                        P.ModelSetting.set('cookie_expired_notified', 'True')
+            except Exception as e:
+                P.logger.warning('쿠키 만료 알림 발송 실패: %s', e)
             return {'ret': 'fail', 'reason': 'cookie_expired'}
+
+        # 정상 verify → 만료 플래그 리셋 (다음 만료 때 다시 1회 알림 가능)
+        try:
+            if (P.ModelSetting.get('cookie_expired_notified') or 'False') == 'True':
+                P.ModelSetting.set('cookie_expired_notified', 'False')
+        except Exception:
+            pass
 
         summary = {'titles': len(self.items), 'downloaded': 0, 'skipped': 0, 'failed': 0}
         for item in self.items:
@@ -209,6 +233,26 @@ class Worker:
                 summary['failed'] += 1
                 _auto_summary_inc('failed')
             _auto_set(titles_done=summary['downloaded'] + summary['skipped'] + summary['failed'])
+
+        # ---- 다운로드 완료 요약 알림 (웹툰/소설 분리, 받은 게 있을 때만) ----
+        if self.completed_webtoon and self.notify_download_url:
+            try:
+                msg = build_download_summary(self.completed_webtoon, is_novel=False)
+                if msg:
+                    ok = send_webhook(self.notify_download_url, msg)
+                    P.logger.info('웹툰 다운로드 요약 알림 발송: %s (%d건)',
+                                  'OK' if ok else 'FAIL', len(self.completed_webtoon))
+            except Exception as e:
+                P.logger.warning('웹툰 다운로드 요약 알림 예외: %s', e)
+        if self.completed_novel and self.notify_download_novel_url:
+            try:
+                msg = build_download_summary(self.completed_novel, is_novel=True)
+                if msg:
+                    ok = send_webhook(self.notify_download_novel_url, msg)
+                    P.logger.info('소설 다운로드 요약 알림 발송: %s (%d건)',
+                                  'OK' if ok else 'FAIL', len(self.completed_novel))
+            except Exception as e:
+                P.logger.warning('소설 다운로드 요약 알림 예외: %s', e)
 
         _auto_set(status='done', finished_at=datetime.now().isoformat(),
                   current_title='', current_phase='', current_episode='',
@@ -309,7 +353,7 @@ class Worker:
         for it, avail in free_owned:
             _auto_set(current_episode=it.get('title', ''),
                       current_pages_done=0, current_pages_total=0)
-            result = self._download_one(title, series_id, it, avail)
+            result = self._download_one(title, series_id, it, avail, is_novel=is_novel)
             if result == 'downloaded':
                 downloaded_count += 1
 
@@ -358,7 +402,7 @@ class Worker:
                           current_episode=it.get('title', ''),
                           current_pages_done=0, current_pages_total=0)
                 result = self._download_one(title, series_id, it, 'locked',
-                                            wf_charged=wf_ready)
+                                            wf_charged=wf_ready, is_novel=is_novel)
                 if result != 'downloaded':
                     P.logger.info('[%s] 잠금 회차 다운 실패/스킵 — 종료', title)
                     break
@@ -396,7 +440,8 @@ class Worker:
 
     # ---- one episode ----
     def _download_one(self, series_title: str, series_id: int, ep_item: dict,
-                      availability: str = 'locked', wf_charged: Optional[bool] = None) -> str:
+                      availability: str = 'locked', wf_charged: Optional[bool] = None,
+                      is_novel: bool = False) -> str:
         """availability='locked' 면 ticket 차감 후 다운, 그 외(free/owned/rented)는
         viewer/data 직접 호출 (ticket 단계 건너뜀).
 
@@ -611,6 +656,16 @@ class Worker:
             rec.status = 'completed'
             P.logger.info('[%s] %s 다운로드 완료 (%d개, %.1fKB)',
                         series_title, episode_title, downloaded, total_bytes / 1024)
+            # 알림 누적 — viewer_type 으로 정확히 분기 (사용자 분류와 무관)
+            entry = {
+                'series_title': series_title,
+                'episode_title': episode_title,
+                'episode_no': ep_no,
+            }
+            if viewer_type == 'TextViewerData':
+                self.completed_novel.append(entry)
+            else:
+                self.completed_webtoon.append(entry)
         else:
             rec.status = 'partial'
             rec.error_msg = f'failed {len(failed)}/{files_count}'

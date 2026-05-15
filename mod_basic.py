@@ -28,6 +28,10 @@ class ModuleBasic(PluginModuleBase):
             'max_per_run': '1',
             'use_waitfree': 'True',       # 기다무 대여권 사용
             'use_owned_rental': 'False',  # 일반(보유) 대여권 사용
+            'notify_webhook_cookie': '',          # 쿠키 만료 시 발송할 웹훅
+            'notify_webhook_download': '',        # 웹툰 다운로드 완료 요약 발송 웹훅
+            'notify_webhook_download_novel': '',  # 소설 다운로드 완료 요약 발송 웹훅
+            'cookie_expired_notified': 'False',   # 쿠키 만료 알림 1회 발송 플래그
             'auto_start': 'False',
         }
         self.web_list_model = ModelKakaopageItem
@@ -86,6 +90,28 @@ class ModuleBasic(PluginModuleBase):
                     'auto': auto_worker.get_auto_state(),
                     'manual': manual_worker.get_state(),
                 }
+            elif command == 'notify_test':
+                # arg1 = 'cookie' | 'download' | 'download_novel'
+                from .notify import send_webhook
+                kind = (arg1 or 'cookie').strip().lower()
+                if kind == 'download_novel':
+                    url_key = 'notify_webhook_download_novel'
+                    label = '소설 다운로드'
+                elif kind == 'download':
+                    url_key = 'notify_webhook_download'
+                    label = '웹툰 다운로드'
+                else:
+                    kind = 'cookie'
+                    url_key = 'notify_webhook_cookie'
+                    label = '쿠키 만료'
+                url = (P.ModelSetting.get(url_key) or '').strip()
+                if not url:
+                    ret = {'ret': 'fail', 'msg': f'{label} URL 미설정'}
+                else:
+                    msg = f'[카카오페이지] 테스트 알림 ({label}) — 정상 수신 확인용'
+                    ok = send_webhook(url, msg)
+                    ret = {'ret': 'success' if ok else 'fail',
+                           'msg': '발송 성공' if ok else '발송 실패 (URL/형식 확인)'}
             elif command == 'db_delete_items':
                 # arg1 = 콤마구분 id 문자열
                 ids = []
