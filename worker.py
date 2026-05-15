@@ -86,21 +86,23 @@ class Worker:
 
     # ---- public ----
     def run(self) -> dict:
+        P.logger.info('[basic] Worker.run BEGIN titles=%s use_waitfree_only=%s max_per_run=%s',
+                      self.titles, self.use_waitfree_only, self.max_per_run)
         _auto_reset()
         _auto_set(status='running', started_at=datetime.now().isoformat(),
                   message='시작', titles_total=len(self.titles))
         if not self.download_root:
-            logger.error('download_path 미설정')
+            P.logger.error('download_path 미설정')
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='download_path 미설정')
             return {'ret': 'fail', 'reason': 'no_download_path'}
         if not self.cookies_json:
-            logger.error('cookies_json 미설정')
+            P.logger.error('cookies_json 미설정')
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='cookies_json 미설정')
             return {'ret': 'fail', 'reason': 'no_cookies'}
         if not self.titles:
-            logger.error('titles 미설정')
+            P.logger.error('titles 미설정')
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='titles 미설정')
             return {'ret': 'fail', 'reason': 'no_titles'}
@@ -108,13 +110,13 @@ class Worker:
         try:
             self.client = KakaopageClient(self.cookies_json, logger=P.logger)
         except AuthRequiredError as e:
-            logger.error('쿠키 인증 실패: %s', e)
+            P.logger.error('쿠키 인증 실패: %s', e)
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message=f'쿠키 인증 실패: {e}')
             return {'ret': 'fail', 'reason': 'auth', 'msg': str(e)}
 
         if not self.client.verify():
-            logger.error('쿠키 만료 — 재주입 필요')
+            P.logger.error('쿠키 만료 — 재주입 필요')
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='쿠키 만료 — 재주입 필요')
             return {'ret': 'fail', 'reason': 'cookie_expired'}
@@ -136,8 +138,8 @@ class Worker:
                     _auto_summary_inc('failed')
             except Exception as e:
                 import traceback
-                logger.error('process title %r exception: %s', title, e)
-                logger.error(traceback.format_exc())
+                P.logger.error('process title %r exception: %s', title, e)
+                P.logger.error(traceback.format_exc())
                 summary['failed'] += 1
                 _auto_summary_inc('failed')
             _auto_set(titles_done=summary['downloaded'] + summary['skipped'] + summary['failed'])
@@ -150,16 +152,16 @@ class Worker:
 
     # ---- per title ----
     def _process_title(self, title: str) -> str:
-        logger.info('[%s] 처리 시작', title)
+        P.logger.info('[%s] 처리 시작', title)
         series = self.client.find_series(title, category='웹툰')
         if not series:
             series = self.client.find_series(title, category='')
         if not series:
-            logger.warning('[%s] 검색 결과에서 매칭 실패', title)
+            P.logger.warning('[%s] 검색 결과에서 매칭 실패', title)
             return 'failed'
 
         series_id = series['series_id']
-        logger.info('[%s] series_id=%s', title, series_id)
+        P.logger.info('[%s] series_id=%s', title, series_id)
 
         # 이용권 보유 + 기다무 충전 상태
         _auto_set(current_phase='check_ticket')
@@ -168,12 +170,12 @@ class Worker:
         my = tm.get('my') or {}
         if self.use_waitfree_only:
             if not wf.get('charged_complete'):
-                logger.info('[%s] 기다무 미충전 — 스킵 (충전 예정: %s)',
+                P.logger.info('[%s] 기다무 미충전 — 스킵 (충전 예정: %s)',
                             title, wf.get('charged_at'))
                 return 'skipped'
         else:
             if not (wf.get('charged_complete') or my.get('ticket_own_count', 0) > 0):
-                logger.info('[%s] 사용 가능한 이용권 없음 — 스킵', title)
+                P.logger.info('[%s] 사용 가능한 이용권 없음 — 스킵', title)
                 return 'skipped'
 
         # 회차 목록 + 마지막 본 회차
@@ -181,16 +183,16 @@ class Worker:
         data = self.client.get_episodes_all(series_id)
         eps = (data.get('list') if isinstance(data, dict) else data) or []
         if not eps:
-            logger.warning('[%s] 회차 목록 비어있음', title)
+            P.logger.warning('[%s] 회차 목록 비어있음', title)
             return 'failed'
 
         last_viewed = self.client.find_last_viewed(eps)
         last_ep_no = self.client.episode_no_from_title(last_viewed['title']) if last_viewed else 0
-        logger.info('[%s] 마지막 본 회차: %s화', title, last_ep_no)
+        P.logger.info('[%s] 마지막 본 회차: %s화', title, last_ep_no)
 
         next_ep = self.client.find_next_episode(eps, after_ep_no=last_ep_no)
         if not next_ep:
-            logger.info('[%s] 다음 화 없음 (최신화 도달 or 모두 구매됨)', title)
+            P.logger.info('[%s] 다음 화 없음 (최신화 도달 or 모두 구매됨)', title)
             return 'skipped'
 
         _auto_set(current_phase='downloading')
@@ -206,7 +208,7 @@ class Worker:
                 tm2 = self.client.get_ticket_my(series_id)
                 wf2 = tm2.get('waitfree') or {}
                 if self.use_waitfree_only and not wf2.get('charged_complete'):
-                    logger.info('[%s] 기다무 소진 — 다음 실행 대기', title)
+                    P.logger.info('[%s] 기다무 소진 — 다음 실행 대기', title)
                     break
                 data2 = self.client.get_episodes_all(series_id)
                 eps2 = (data2.get('list') if isinstance(data2, dict) else data2) or []
@@ -226,7 +228,7 @@ class Worker:
         # DB 레코드 확보 (product_id 유일 인덱스)
         rec = db.session.query(ModelKakaopageItem).filter_by(product_id=product_id).first()
         if rec and rec.status == 'completed':
-            logger.info('[%s] %s 이미 다운로드 완료 — 스킵', series_title, episode_title)
+            P.logger.info('[%s] %s 이미 다운로드 완료 — 스킵', series_title, episode_title)
             return 'skipped'
         if rec is None:
             rec = ModelKakaopageItem()
@@ -250,7 +252,7 @@ class Worker:
             db.session.commit(); return 'failed'
         ticket_rental_type = (ready.get('available') or {}).get('ticket_rental_type')
         if not ticket_rental_type:
-            logger.info('[%s] %s 무료/유료 외 케이스 — 스킵', series_title, episode_title)
+            P.logger.info('[%s] %s 무료/유료 외 케이스 — 스킵', series_title, episode_title)
             rec.status = 'skipped_no_ticket'; db.session.commit(); return 'skipped'
 
         # 2) 차감
@@ -262,14 +264,14 @@ class Worker:
         rec.ticket_uid = used.get('ticket_uid')
         rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
         db.session.commit()
-        logger.info('[%s] %s 차감 OK (ticket_uid=%s, expire=%s)',
+        P.logger.info('[%s] %s 차감 OK (ticket_uid=%s, expire=%s)',
                     series_title, episode_title, rec.ticket_uid, rec.rent_expire_dt)
 
         # 3) 열람 등록
         try:
             self.client.open_page(series_id, product_id, rec.ticket_uid or '')
         except KakaopageError as e:
-            logger.warning('open_page 실패 (계속 진행): %s', e)
+            P.logger.warning('open_page 실패 (계속 진행): %s', e)
 
         # 4) viewer/data
         try:
@@ -315,7 +317,7 @@ class Worker:
                 _auto_set(current_pages_done=downloaded)
             except Exception as e:
                 failed.append((no, str(e)))
-                logger.warning('[%s] %s page %s 다운 실패: %s', series_title, episode_title, no, e)
+                P.logger.warning('[%s] %s page %s 다운 실패: %s', series_title, episode_title, no, e)
         rec.downloaded_count = downloaded
         rec.total_bytes = total_bytes
         rec.downloaded_at = datetime.now()
@@ -323,12 +325,12 @@ class Worker:
 
         if downloaded == len(files):
             rec.status = 'completed'
-            logger.info('[%s] %s 다운로드 완료 (%d장, %.1fMB)',
+            P.logger.info('[%s] %s 다운로드 완료 (%d장, %.1fMB)',
                         series_title, episode_title, downloaded, total_bytes/1024/1024)
         else:
             rec.status = 'partial'
             rec.error_msg = f'failed {len(failed)}/{len(files)}'
-            logger.warning('[%s] %s 일부 실패 (%d/%d)',
+            P.logger.warning('[%s] %s 일부 실패 (%d/%d)',
                            series_title, episode_title, downloaded, len(files))
         db.session.commit()
 
