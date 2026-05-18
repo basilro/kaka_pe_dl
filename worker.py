@@ -18,6 +18,62 @@ def _safe_filename(s: str) -> str:
     return s.strip().strip('.')
 
 
+_IMAGE_EXTS = ('.webp', '.jpg', '.jpeg', '.png', '.gif', '.bmp')
+
+
+def compress_episode_folder(ep_folder: str) -> Optional[str]:
+    """회차 폴더 → 같은 위치에 .zip 생성. 성공 시 원본 폴더 삭제. 멱등.
+
+    이미 .zip 이 있으면 그대로 둠. 이미지 파일만 포함 (소설 .txt 등은 제외).
+    반환: 생성/기존 zip 경로 또는 None (실패/대상 아님).
+    """
+    import shutil
+    import zipfile
+    if not os.path.isdir(ep_folder):
+        return None
+    parent = os.path.dirname(ep_folder)
+    name = os.path.basename(ep_folder)
+    zip_path = os.path.join(parent, name + '.zip')
+    if os.path.exists(zip_path):
+        try:
+            shutil.rmtree(ep_folder)
+        except Exception:
+            pass
+        return zip_path
+
+    try:
+        files_to_zip = []
+        for f in sorted(os.listdir(ep_folder)):
+            path = os.path.join(ep_folder, f)
+            if os.path.isfile(path) and f.lower().endswith(_IMAGE_EXTS):
+                files_to_zip.append((f, path))
+    except Exception:
+        return None
+    if not files_to_zip:
+        return None
+
+    tmp_zip = zip_path + '.tmp'
+    try:
+        with zipfile.ZipFile(tmp_zip, 'w', zipfile.ZIP_STORED) as zf:
+            for arcname, path in files_to_zip:
+                zf.write(path, arcname=arcname)
+        os.replace(tmp_zip, zip_path)
+    except Exception as e:
+        if os.path.exists(tmp_zip):
+            try:
+                os.remove(tmp_zip)
+            except Exception:
+                pass
+        P.logger.warning('압축 실패 %s: %s', ep_folder, e)
+        return None
+
+    try:
+        shutil.rmtree(ep_folder)
+    except Exception as e:
+        P.logger.warning('압축 후 폴더 삭제 실패 %s: %s', ep_folder, e)
+    return zip_path
+
+
 def _xml_escape(s) -> str:
     if s is None:
         return ''
@@ -311,6 +367,7 @@ class Worker:
         self.notify_download_novel_url = (self.cfg.get('notify_webhook_download_novel') or '').strip()
         self.proxy_url = KakaopageClient.resolve_proxy(
             self.cfg.get('use_proxy'), self.cfg.get('proxy_url'))
+        self.use_compress = (self.cfg.get('use_compress') or 'False') == 'True'
         self.client: Optional[KakaopageClient] = None
         # 알림용 누적 — 웹툰/소설 분리
         self.completed_webtoon: List[Dict[str, Any]] = []
@@ -730,6 +787,56 @@ class Worker:
                            f"실패 {summary['failed']}"))
         return {'ret': 'success', **summary}
 
+    # ---- 회차 폴더 일괄 압축 (UI 버튼) ----
+    def compress_all(self) -> dict:
+        """download_path 아래의 모든 회차 폴더를 ZIP 으로 압축.
+
+        '회차 폴더' = 이미지 파일을 가진 폴더. info.xml/cover.jpg 만 있는
+        작품 폴더와 .txt 만 있는 소설 작품 폴더는 자동 제외 (이미지 없음).
+        이미 .zip 인 회차는 건너뜀.
+        """
+        P.logger.info('[basic] compress_all BEGIN root=%s', self.download_root)
+        _auto_reset()
+        _auto_set(status='running', started_at=datetime.now().isoformat(),
+                  message='압축 시작')
+        if not self.download_root or not os.path.isdir(self.download_root):
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='download_path 미설정/없음')
+            return {'ret': 'fail', 'reason': 'no_download_path'}
+
+        candidates: List[str] = []
+        for root, _dirs, files in os.walk(self.download_root):
+            if any(f.lower().endswith(_IMAGE_EXTS) for f in files):
+                candidates.append(root)
+
+        _auto_set(titles_total=len(candidates))
+        compressed = 0
+        skipped = 0
+        failed = 0
+        for idx, ep in enumerate(candidates, start=1):
+            rel = os.path.relpath(ep, self.download_root)
+            _auto_set(current_title=rel, current_phase='compressing',
+                      titles_done=idx - 1)
+            try:
+                zip_path = compress_episode_folder(ep)
+                if zip_path:
+                    compressed += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                P.logger.warning('압축 예외 %s: %s', ep, e)
+                failed += 1
+            _auto_set(titles_done=idx)
+
+        _auto_set(status='done', finished_at=datetime.now().isoformat(),
+                  current_title='', current_phase='',
+                  message=(f'압축 완료 — 처리 {compressed}개, '
+                           f'스킵 {skipped}개, 실패 {failed}개'))
+        P.logger.info('[basic] compress_all END processed=%d skipped=%d failed=%d',
+                      compressed, skipped, failed)
+        return {'ret': 'success', 'processed': compressed,
+                'skipped': skipped, 'failed': failed}
+
     # ---- one episode ----
     def _download_one(self, series_title: str, series_id: int, ep_item: dict,
                       availability: str = 'locked', wf_charged: Optional[bool] = None,
@@ -970,6 +1077,16 @@ class Worker:
             P.logger.warning('[%s] %s 일부 실패 (%d/%d)',
                            series_title, episode_title, downloaded, files_count)
         db.session.commit()
+
+        # 정상 완료 + 압축 옵션 On + 웹툰일 때만 회차 폴더 ZIP 압축 (소설은 제외)
+        if (self.use_compress and rec.status == 'completed'
+                and viewer_type != 'TextViewerData'):
+            zip_path = compress_episode_folder(save_dir)
+            if zip_path:
+                rec.save_dir = zip_path
+                db.session.commit()
+                P.logger.info('[%s] %s 압축 완료 → %s',
+                              series_title, episode_title, zip_path)
 
         # 7) 진행 보고
         self.client.report_last_page(series_id, product_id, is_done=(rec.status == 'completed'))
