@@ -444,6 +444,16 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
         rec.status = 'completed'
         _ep_update(idx, state='completed')
         db.session.commit()
+        # 정상 완료 + 압축 옵션 On → 회차 폴더 ZIP 압축 (웹툰만)
+        if (P.ModelSetting.get('use_compress') or 'False') == 'True':
+            from . import worker as _wkr
+            zip_path = _wkr.compress_episode_folder(save_dir)
+            if zip_path:
+                rec.save_dir = zip_path
+                db.session.commit()
+                _ep_update(idx, save_dir=zip_path)
+                P.logger.info('[manual] %s 압축 완료 → %s',
+                              episode_title, zip_path)
         return 'completed'
     elif downloaded > 0:
         rec.status = 'partial'

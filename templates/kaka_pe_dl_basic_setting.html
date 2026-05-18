@@ -5,7 +5,8 @@
   {{ macros.m_button_group([['globalSettingSaveBtn', '설정 저장'],
                             ['globalImmediatelyExecuteBtn', '즉시 실행'],
                             ['verifyCookiesBtn', '쿠키 검증'],
-                            ['syncMetadataBtn', '메타 동기화']]) }}
+                            ['syncMetadataBtn', '메타 동기화'],
+                            ['compressAllBtn', '압축 처리']]) }}
   {{ macros.m_row_start('5') }}
   {{ macros.m_row_end() }}
   <nav>
@@ -56,6 +57,10 @@
         {{ macros.setting_checkbox('use_owned_rental', '일반(보유) 대여권 사용',
             value=arg['use_owned_rental'],
             desc='On: 보유한 일반 대여권 잔량까지 모두 사용. 둘 다 Off면 잠금 회차는 스킵하고 무료/소장만 다운.') }}
+
+        {{ macros.setting_checkbox('use_compress', '회차 폴더 ZIP 압축 (웹툰만)',
+            value=arg['use_compress'],
+            desc='On: 정상 다운로드 완료 시 웹툰 회차 폴더를 NNNN_회차.zip 으로 묶고 원본 폴더 삭제. 카카오페이지 소설(.txt)은 압축 안 함.') }}
 
         <hr style="margin:18px 0;"/>
         <h5 style="margin-bottom:8px;">프록시 (선택)</h5>
@@ -142,6 +147,22 @@ $('body').on('click', '#verifyCookiesBtn', function(e){
          function(data){
     if(data.ret === 'success'){ $.notify(data.msg || '쿠키 유효', {className: 'success'}); }
     else { $.notify(data.msg || '쿠키 검증 실패', {className: 'error'}); }
+  });
+});
+
+$('body').on('click', '#compressAllBtn', function(e){
+  e.preventDefault();
+  if (!confirm('다운로드 폴더 아래 모든 웹툰 회차 폴더를 .zip 으로 묶고 원본 폴더를 삭제합니다.\n소설(.txt) 폴더와 이미 .zip 인 회차는 건너뜁니다.\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'compress_all'},
+         function(data){
+    if(data && data.ret === 'success'){
+      $.notify(data.msg || '압축 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
   });
 });
 
