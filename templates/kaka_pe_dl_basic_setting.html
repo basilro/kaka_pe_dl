@@ -4,7 +4,8 @@
 <div>
   {{ macros.m_button_group([['globalSettingSaveBtn', '설정 저장'],
                             ['globalImmediatelyExecuteBtn', '즉시 실행'],
-                            ['verifyCookiesBtn', '쿠키 검증']]) }}
+                            ['verifyCookiesBtn', '쿠키 검증'],
+                            ['syncMetadataBtn', '메타 동기화']]) }}
   {{ macros.m_row_start('5') }}
   {{ macros.m_row_end() }}
   <nav>
@@ -56,6 +57,20 @@
             value=arg['use_owned_rental'],
             desc='On: 보유한 일반 대여권 잔량까지 모두 사용. 둘 다 Off면 잠금 회차는 스킵하고 무료/소장만 다운.') }}
 
+        <hr style="margin:18px 0;"/>
+        <h5 style="margin-bottom:8px;">프록시 (선택)</h5>
+
+        {{ macros.setting_checkbox('use_proxy', '프록시 사용',
+            value=arg['use_proxy'],
+            desc='On + 아래 URL 값이 있을 때만 프록시 적용. Off면 직접 연결.') }}
+
+        {{ macros.setting_input_text('proxy_url', '프록시 URL',
+            value=arg['proxy_url'],
+            desc=['warproxy 등 외부 프록시.',
+                  '예) http://user:pass@proxy.host:8080 또는 socks5h://host:1080',
+                  '※ On일 때 API 호출 + 이미지 CDN 다운로드 모두 같은 프록시 사용 (토큰 IP 검증 회피).',
+                  '※ 트래픽 부담 ↑ — 불안정하면 Off']) }}
+
         {{ macros.setting_buttons([['globalDbDeleteBtn', '이력 초기화']], 'DB 정리') }}
       {{ macros.m_tab_content_end() }}
 
@@ -102,7 +117,15 @@
 <script type="text/javascript">
 var package_name = "{{ arg['package_name'] }}";
 
-$(document).ready(function(){});
+$(document).ready(function(){
+  function syncProxyInput(){
+    var on = $('#use_proxy').is(':checked');
+    $('#proxy_url').prop('disabled', !on);
+    $('#proxy_url').css('opacity', on ? 1 : 0.5);
+  }
+  syncProxyInput();
+  $('body').on('change', '#use_proxy', syncProxyInput);
+});
 
 $('body').on('click', '#select_download_path_btn', function(e){
   e.preventDefault();
@@ -119,6 +142,22 @@ $('body').on('click', '#verifyCookiesBtn', function(e){
          function(data){
     if(data.ret === 'success'){ $.notify(data.msg || '쿠키 유효', {className: 'success'}); }
     else { $.notify(data.msg || '쿠키 검증 실패', {className: 'error'}); }
+  });
+});
+
+$('body').on('click', '#syncMetadataBtn', function(e){
+  e.preventDefault();
+  if (!confirm('체크할 작품 폴더에 info.xml / cover.jpg 가 없으면 생성합니다.\n다운로드 폴더에 작품 폴더가 있는 항목만 처리됩니다.\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'sync_metadata'},
+         function(data){
+    if(data && data.ret === 'success'){
+      $.notify(data.msg || '메타 동기화 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
   });
 });
 

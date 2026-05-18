@@ -18,6 +18,173 @@ def _safe_filename(s: str) -> str:
     return s.strip().strip('.')
 
 
+def _xml_escape(s) -> str:
+    if s is None:
+        return ''
+    return (str(s).replace('&', '&amp;')
+                  .replace('<', '"').replace('>', '"').strip())
+
+
+_THUMB_HOST = 'https://page-images.kakaoentcdn.com/download/resource'
+
+
+def _thumb_url(kid: str) -> str:
+    if not kid:
+        return ''
+    if kid.startswith('http'):
+        return kid
+    return f'{_THUMB_HOST}?kid={kid}&filename=o1'
+
+
+# Kavita/Komga 호환 ComicInfo XML — reading_info 의 포맷과 동일
+_INFO_XML = '''<?xml version="1.0"?>
+<ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Title>{title}</Title>
+  <Series>{title}</Series>
+  <Summary>{desc}</Summary>
+  <Writer>{author}</Writer>
+  <Publisher>{publisher}</Publisher>
+  <Genre>{genre}</Genre>
+  <Tags>{tags}</Tags>
+  <LanguageISO>ko</LanguageISO>
+  <Notes>{notes}</Notes>
+  <CoverArtist></CoverArtist>
+  <Penciller></Penciller>
+  <Inker></Inker>
+  <Colorist></Colorist>
+  <Letterer></Letterer>
+  <Editor></Editor>
+  <Characters></Characters>
+  <Year>{year}</Year>
+  <Month>{month}</Month>
+  <Day>{day}</Day>
+</ComicInfo>'''
+
+
+# ---- 메타 헬퍼 (모듈 레벨 — auto/manual worker 모두에서 재사용) ----
+def title_dir_for(download_root: str, title_name: str,
+                  is_novel: bool = False) -> str:
+    """kakaopage 다운로드 폴더 규칙: {download_root}/{webtoon|novel}/{title}/"""
+    kind = 'novel' if is_novel else 'webtoon'
+    return os.path.join(download_root, kind, _safe_filename(title_name))
+
+
+def build_info_xml(title_name: str, series_meta: Dict[str, Any],
+                   is_novel: bool = False) -> str:
+    """kakaopage series_item → ComicInfo XML. 부족한 필드는 빈 값."""
+    m = series_meta or {}
+    title = m.get('title') or title_name or ''
+    desc = m.get('description') or ''
+    authors_raw = m.get('authors') or ''
+    author = ', '.join(a.strip() for a in re.split(r'[,/·]', authors_raw) if a.strip())
+    category = (m.get('category') or '').strip()
+    sub_category = (m.get('sub_category') or '').strip()
+    genres = [g for g in (category, sub_category) if g]
+    tags = [t for t in ('카카오페이지', sub_category) if t]
+    on_issue = (m.get('on_issue') or '').upper()
+    if on_issue == 'Y':
+        notes = '연재중'
+    elif on_issue == 'N':
+        notes = '완결'
+    else:
+        notes = ''
+
+    year = month = day = ''
+    sale_dt = (m.get('start_sale_dt') or '')[:10]  # 'YYYY-MM-DD...'
+    mch = re.match(r'(\d{4})-(\d{2})-(\d{2})', sale_dt)
+    if mch:
+        year, month, day = mch.group(1), mch.group(2), mch.group(3)
+
+    return _INFO_XML.format(
+        title=_xml_escape(title),
+        desc=_xml_escape(desc),
+        author=_xml_escape(author),
+        publisher=_xml_escape('카카오페이지'),
+        genre=_xml_escape(', '.join(genres)),
+        tags=_xml_escape(', '.join(tags)),
+        notes=_xml_escape(notes),
+        year=year, month=month, day=day,
+    )
+
+
+def _download_cover(client, url: str, dest_path: str) -> bool:
+    """client._session() 으로 cover 받아 JPG 로 저장 (Pillow 변환)."""
+    if not url or client is None:
+        return False
+    try:
+        s = client._session()
+        s.headers['Accept'] = 'image/avif,image/webp,*/*'
+        r = s.get(url, timeout=20)
+        if r.status_code != 200:
+            P.logger.warning('cover HTTP=%d url=%s', r.status_code, url[:120])
+            return False
+        data = r.content
+        if data[:3] == b'\xff\xd8\xff':
+            with open(dest_path, 'wb') as fp:
+                fp.write(data)
+            return True
+        try:
+            import io
+            from PIL import Image
+            img = Image.open(io.BytesIO(data))
+            if img.mode in ('RGBA', 'LA'):
+                bg = Image.new('RGB', img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[-1])
+                img = bg
+            elif img.mode == 'P':
+                img = img.convert('RGBA')
+                bg = Image.new('RGB', img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[-1])
+                img = bg
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            img.save(dest_path, format='JPEG', quality=92, optimize=False)
+            return True
+        except Exception as e:
+            P.logger.warning('cover JPG 변환 실패 — 원본 저장: %s', e)
+            with open(dest_path, 'wb') as fp:
+                fp.write(data)
+            return True
+    except Exception as e:
+        P.logger.warning('cover 다운로드 예외: %s url=%s', e, url[:120])
+        return False
+
+
+def ensure_title_metadata(client, download_root: str,
+                          title_name: str, series_id: int,
+                          series_meta: Dict[str, Any],
+                          is_novel: bool = False) -> Dict[str, Any]:
+    """작품 폴더에 info.xml / cover.jpg 가 없으면 생성. 멱등."""
+    result = {'info': False, 'cover': False, 'dir': ''}
+    title_dir = title_dir_for(download_root, title_name, is_novel)
+    result['dir'] = title_dir
+    try:
+        os.makedirs(title_dir, exist_ok=True)
+    except Exception as e:
+        P.logger.warning('[%s] 작품 폴더 생성 실패: %s', title_name, e)
+        return result
+
+    info_path = os.path.join(title_dir, 'info.xml')
+    if not os.path.exists(info_path):
+        try:
+            xml = build_info_xml(title_name, series_meta or {}, is_novel)
+            with open(info_path, 'w', encoding='utf-8') as fp:
+                fp.write(xml)
+            P.logger.info('[%s] info.xml 생성', title_name)
+            result['info'] = True
+        except Exception as e:
+            P.logger.warning('[%s] info.xml 생성 실패: %s', title_name, e)
+
+    cover_path = os.path.join(title_dir, 'cover.jpg')
+    if not os.path.exists(cover_path):
+        kid = (series_meta or {}).get('thumbnail') or ''
+        url = _thumb_url(kid)
+        if _download_cover(client, url, cover_path):
+            P.logger.info('[%s] cover.jpg 생성', title_name)
+            result['cover'] = True
+    return result
+
+
 def _extract_own_ticket_count(tm: Dict[str, Any]) -> int:
     """ticket/my 응답에서 일반(보유) 대여권 잔량 추출.
 
@@ -142,6 +309,8 @@ class Worker:
         self.notify_cookie_url = (self.cfg.get('notify_webhook_cookie') or '').strip()
         self.notify_download_url = (self.cfg.get('notify_webhook_download') or '').strip()
         self.notify_download_novel_url = (self.cfg.get('notify_webhook_download_novel') or '').strip()
+        self.proxy_url = KakaopageClient.resolve_proxy(
+            self.cfg.get('use_proxy'), self.cfg.get('proxy_url'))
         self.client: Optional[KakaopageClient] = None
         # 알림용 누적 — 웹툰/소설 분리
         self.completed_webtoon: List[Dict[str, Any]] = []
@@ -181,7 +350,8 @@ class Worker:
             return {'ret': 'fail', 'reason': 'no_titles'}
 
         try:
-            self.client = KakaopageClient(self.cookies_json, logger=P.logger)
+            self.client = KakaopageClient(self.cookies_json, logger=P.logger,
+                                          proxy_url=self.proxy_url)
         except AuthRequiredError as e:
             P.logger.error('쿠키 인증 실패: %s', e)
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
@@ -324,6 +494,10 @@ class Worker:
 
         title = title_holder['t']
 
+        # info.xml / cover.jpg — 작품 폴더에 없으면 자동 생성 (다운로드 여부 무관)
+        series_meta = data.get('series_item') if isinstance(data, dict) else None
+        self._ensure_title_metadata(title, series_id, series_meta or {}, is_novel)
+
         # 분류: 받지 않은 회차들 → free/owned/rented(직접) vs locked(기다무 ticket 필요)
         free_owned: List = []   # (item, availability)
         locked: List = []
@@ -437,6 +611,124 @@ class Worker:
                 my = my2
 
         return 'downloaded' if downloaded_count else 'skipped'
+
+    # ---- 작품 폴더 메타 (info.xml / cover.jpg) wrapper ----
+    def _ensure_title_metadata(self, title_name: str, series_id: int,
+                               series_meta: Dict[str, Any],
+                               is_novel: bool = False) -> Dict[str, Any]:
+        return ensure_title_metadata(self.client, self.download_root,
+                                     title_name, series_id, series_meta,
+                                     is_novel=is_novel)
+
+    # ---- 전 작품 메타 일괄 동기화 (UI 버튼) ----
+    def sync_metadata_all(self) -> dict:
+        """titles + titles_novel 의 모든 작품에 대해 info.xml/cover.jpg 누락분 생성.
+
+        다운로드 폴더에 작품 폴더가 이미 있는 항목만 처리 — 없으면 만들지 않고 스킵.
+        """
+        P.logger.info('[basic] sync_metadata_all BEGIN items=%d', len(self.items))
+        _auto_reset()
+        _auto_set(status='running', started_at=datetime.now().isoformat(),
+                  message='메타 동기화 시작', titles_total=len(self.items))
+        if not self.download_root:
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='download_path 미설정')
+            return {'ret': 'fail', 'reason': 'no_download_path'}
+        if not self.cookies_json:
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='cookies_json 미설정')
+            return {'ret': 'fail', 'reason': 'no_cookies'}
+        if not self.items:
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='체크할 작품 미설정')
+            return {'ret': 'fail', 'reason': 'no_titles'}
+
+        try:
+            self.client = KakaopageClient(self.cookies_json, logger=P.logger,
+                                          proxy_url=self.proxy_url)
+        except AuthRequiredError as e:
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message=f'쿠키 인증 실패: {e}')
+            return {'ret': 'fail', 'reason': 'auth', 'msg': str(e)}
+
+        summary = {'titles': len(self.items), 'info': 0, 'cover': 0,
+                   'skipped_no_folder': 0, 'failed': 0}
+        for item in self.items:
+            raw = item['raw']
+            is_novel = item['is_novel']
+            kind_label = '소설' if is_novel else '웹툰'
+            _auto_set(current_title=f'[{kind_label}] {raw}',
+                      current_phase='sync_metadata',
+                      current_episode='', current_pages_done=0,
+                      current_pages_total=0)
+            try:
+                sid = KakaopageClient.extract_series_id(raw)
+                if sid is None:
+                    category = '웹소설' if is_novel else '웹툰'
+                    series = self.client.find_series(raw, category=category)
+                    if not series:
+                        series = self.client.find_series(raw, category='')
+                    if not series:
+                        summary['failed'] += 1
+                        continue
+                    sid = series['series_id']
+                    title_guess = series.get('title') or raw
+                else:
+                    title_guess = raw
+
+                # 폴더 존재 여부 먼저 확인 — 없으면 메타 API 호출 없이 스킵
+                folder = title_dir_for(self.download_root, title_guess, is_novel)
+                series_meta = {}
+                if not os.path.isdir(folder):
+                    # 검색 결과 title로도 한 번 더 점검 (입력이 ID인 경우)
+                    series_meta = self.client.get_series_item(sid)
+                    new_title = (series_meta.get('title') or '').strip()
+                    if new_title:
+                        alt_folder = title_dir_for(self.download_root,
+                                                   new_title, is_novel)
+                        if os.path.isdir(alt_folder):
+                            folder = alt_folder
+                            title_guess = new_title
+                        else:
+                            summary['skipped_no_folder'] += 1
+                            continue
+                    else:
+                        summary['skipped_no_folder'] += 1
+                        continue
+
+                _auto_set(current_title=f'[{kind_label}] {title_guess}')
+
+                # 둘 다 이미 있으면 API 호출 안 함
+                info_p = os.path.join(folder, 'info.xml')
+                cover_p = os.path.join(folder, 'cover.jpg')
+                if os.path.isfile(info_p) and os.path.isfile(cover_p):
+                    continue
+
+                if not series_meta:
+                    series_meta = self.client.get_series_item(sid) or {}
+
+                r = self._ensure_title_metadata(title_guess, sid, series_meta,
+                                                is_novel=is_novel)
+                if r.get('info'):
+                    summary['info'] += 1
+                if r.get('cover'):
+                    summary['cover'] += 1
+            except Exception as e:
+                import traceback
+                P.logger.error('[sync_metadata] %r 예외: %s', raw, e)
+                P.logger.error(traceback.format_exc())
+                summary['failed'] += 1
+            _auto_set(titles_done=(summary['info'] + summary['cover']
+                                   + summary['skipped_no_folder']
+                                   + summary['failed']))
+
+        _auto_set(status='done', finished_at=datetime.now().isoformat(),
+                  current_title='', current_phase='', current_episode='',
+                  message=(f"메타 동기화 완료 — info {summary['info']}, "
+                           f"cover {summary['cover']}, "
+                           f"폴더없음 {summary['skipped_no_folder']}, "
+                           f"실패 {summary['failed']}"))
+        return {'ret': 'success', **summary}
 
     # ---- one episode ----
     def _download_one(self, series_title: str, series_id: int, ep_item: dict,

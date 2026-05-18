@@ -36,12 +36,14 @@ class NotPurchasedError(KakaopageError):
 
 class KakaopageClient:
 
-    def __init__(self, cookies_json: str, logger=None):
+    def __init__(self, cookies_json: str, logger=None, proxy_url: str = None):
         """
         cookies_json: Cookie-Editor export JSON 문자열 (또는 list).
         logger: SJVA 로거 (optional). 없으면 stdlib logging fallback.
+        proxy_url: warproxy 등 외부 프록시 URL. 비우면 직접 연결.
         """
         self.logger = logger
+        self._proxy_url = (proxy_url or '').strip() or None
         self._parse_cookies(cookies_json)
         self._kpdid = next((c['value'] for c in self.cookies if c['name'] == '_kpdid'), None)
 
@@ -81,6 +83,8 @@ class KakaopageClient:
             'Origin': PAGE,
             'Referer': referer,
         })
+        if self._proxy_url:
+            s.proxies = {'http': self._proxy_url, 'https': self._proxy_url}
         for c in self.cookies:
             try:
                 s.cookies.set(c['name'], c['value'],
@@ -156,6 +160,20 @@ class KakaopageClient:
         self._log('info', 'product/list[%s] status=%d body[:200]=%s',
                   phase, r.status_code, r.text[:200])
         return self._check(self._json(r))
+
+    def get_series_item(self, series_id: int) -> Dict[str, Any]:
+        """series_item 메타만 빠르게 받기 (ANCHOR 1회). 페이징 안 함.
+
+        반환: series_item dict — title/description/thumbnail/authors/category/...
+        실패/없음이면 빈 dict.
+        """
+        try:
+            body = self._fetch_product_list(series_id, 0, 'ANCHOR', 6,
+                                            phase='meta-only')
+        except Exception as e:
+            self._log('warning', 'get_series_item 실패 sid=%s: %s', series_id, e)
+            return {}
+        return (body.get('result') or {}).get('series_item') or {}
 
     def get_episodes_all(self, series_id: int, window_size: int = 25,
                          on_series_item=None) -> Dict[str, Any]:
@@ -467,6 +485,17 @@ class KakaopageClient:
             raise KakaopageError(f'novel content invalid json: {e}')
         ci = data.get('contentInfo') or {}
         return self._extract_paragraphs(ci.get('paragraphList'))
+
+    @staticmethod
+    def resolve_proxy(use_proxy, proxy_url) -> str:
+        """설정값 → 실제 사용할 프록시 URL. use_proxy=True 이고 URL 있을 때만."""
+        try:
+            enabled = (str(use_proxy or 'False').strip() == 'True')
+        except Exception:
+            enabled = False
+        if not enabled:
+            return ''
+        return (proxy_url or '').strip()
 
     # ---- 다운로드 (이미지) ----
     def download_image(self, secure_url: str, save_path: str) -> int:
