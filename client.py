@@ -123,15 +123,20 @@ class KakaopageClient:
         2차: BFF 인증 endpoint 호출 — 메인 HTML 이 SPA 라 인디케이터를
              못 찾았을 때 결정 짓는 fallback.
 
-        진단을 위해 응답 status / 쿠키 종류 / 매칭 결과를 로그에 남김.
+        실패 사유는 self.last_verify_error 에 저장 — 호출자가 쿠키 만료와
+        프록시 연결 실패 등을 구분해서 안내 메시지를 보여줄 수 있게.
         """
+        self.last_verify_error: str = ''
+
         # ---- 진단: 어떤 쿠키가 주입됐는지 ----
         cookie_names = sorted({c['name'] for c in self.cookies})
         required = ['_kau', '_karmt', '_kawlt', '_kpwtkn', '_T_ANO', '_kpdid']
         missing = [n for n in required if n not in cookie_names]
-        self._log('info', '[verify] cookies n=%d names=%s missing=%s',
+        self._log('info', '[verify] cookies n=%d names=%s missing=%s '
+                  'proxy=%s',
                   len(cookie_names), ','.join(cookie_names),
-                  ','.join(missing) if missing else 'none')
+                  ','.join(missing) if missing else 'none',
+                  self._proxy_url or '(none)')
 
         # ---- 1차: 메인 페이지 HTML ----
         html_ok = False
@@ -153,15 +158,24 @@ class KakaopageClient:
                     self._log('info',
                               '[verify] HTML 인디케이터 없음 — SPA 가능성. '
                               '본문 미리보기: %s', snippet[:300])
+        except requests.exceptions.ProxyError as e:
+            self.last_verify_error = f'proxy: {e}'
+            self._log('warning',
+                      '[verify] 프록시 연결 실패 — warproxy 가 안 떠 있거나 '
+                      'URL 이 잘못됐는지 확인: %s', e)
+            return False  # 프록시 다운이면 BFF 도 동일하게 실패 — 즉시 종료
+        except requests.exceptions.ConnectionError as e:
+            self.last_verify_error = f'connection: {e}'
+            self._log('warning', '[verify] 네트워크 연결 실패: %s', e)
+            return False
         except Exception as e:
+            self.last_verify_error = f'html: {e}'
             self._log('warning', '[verify] HTML 요청 예외: %s', e)
 
         if html_ok:
             return True
 
         # ---- 2차: BFF 인증 endpoint ----
-        # /api/gateway/api/v1/user/main 같은 me 류 endpoint 시도.
-        # 실패해도 빠르게 다른 후보 → 하나라도 result_code=0 응답이면 OK.
         candidates = [
             f'{BFF}/api/gateway/api/v1/user/main',
             f'{BFF}/api/gateway/api/v2/user/main',
@@ -183,19 +197,24 @@ class KakaopageClient:
                     self._log('info', '[verify] BFF OK via %s', url)
                     return True
                 if rc == -100:
-                    # 명확한 인증 실패 — 다음 후보 시도해도 결과 동일
+                    self.last_verify_error = 'auth: result_code=-100'
                     self._log('info', '[verify] BFF 인증 거부 (-100) at %s', url)
                     return False
+            except requests.exceptions.ProxyError as e:
+                self.last_verify_error = f'proxy: {e}'
+                self._log('warning', '[verify] BFF 프록시 연결 실패 — 즉시 종료: %s', e)
+                return False
             except Exception as e:
                 self._log('info', '[verify] BFF %s 예외(계속): %s', url, e)
 
-        # 1차/2차 모두 결정 못한 경우 — 통합 로그인 쿠키 부족 의심하며 False
         if missing:
             self._log('warning',
                       '[verify] 결정 짓지 못함. 누락 의심 쿠키: %s. '
                       'accounts.kakao.com 에서 Cookie-Editor 로 .kakao.com '
                       '도메인 쿠키도 함께 export 해서 합쳐 주세요.',
                       ','.join(missing))
+        if not self.last_verify_error:
+            self.last_verify_error = 'unknown: 인증 인디케이터 못 찾음'
         return False
 
     # ---- 검색 / 메타 ----

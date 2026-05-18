@@ -64,8 +64,17 @@ class ModuleBasic(PluginModuleBase):
                     cli = KakaopageClient(P.ModelSetting.get('cookies_json'),
                                           logger=P.logger, proxy_url=proxy_url)
                     ok = cli.verify()
-                    ret = {'ret': 'success' if ok else 'fail',
-                           'msg': '쿠키 유효 (로그인 상태 확인됨)' if ok else '쿠키 만료/무효 — 재주입 필요'}
+                    if ok:
+                        msg = '쿠키 유효 (로그인 상태 확인됨)'
+                    else:
+                        err = (getattr(cli, 'last_verify_error', '') or '').lower()
+                        if err.startswith('proxy:') or 'connection refused' in err:
+                            msg = '프록시 연결 실패 — warproxy 동작 여부/URL 확인 (쿠키는 정상일 수 있음)'
+                        elif err.startswith('connection:'):
+                            msg = '네트워크 연결 실패 — DNS/방화벽 확인'
+                        else:
+                            msg = '쿠키 만료/무효 — 재주입 필요'
+                    ret = {'ret': 'success' if ok else 'fail', 'msg': msg}
                 except AuthRequiredError as e:
                     ret = {'ret': 'fail', 'msg': str(e)}
             elif command == 'run_now':
