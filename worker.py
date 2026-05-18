@@ -416,19 +416,32 @@ class Worker:
             return {'ret': 'fail', 'reason': 'auth', 'msg': str(e)}
 
         if not self.client.verify():
-            P.logger.error('쿠키 만료 — 재주입 필요')
+            err = (getattr(self.client, 'last_verify_error', '') or '').lower()
+            is_proxy = err.startswith('proxy:') or 'connection refused' in err
+            is_network = err.startswith('connection:') or 'connection' in err
+            if is_proxy:
+                msg = '프록시 연결 실패 — warproxy 동작 여부/URL 확인'
+                reason = 'proxy_error'
+            elif is_network:
+                msg = '네트워크 연결 실패 — DNS/방화벽 확인'
+                reason = 'network_error'
+            else:
+                msg = '쿠키 만료 — 재주입 필요'
+                reason = 'cookie_expired'
+            P.logger.error('%s (verify_err=%s)', msg, err[:200])
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
-                      message='쿠키 만료 — 재주입 필요')
-            # 만료 알림 — 1회만 발송 (스팸 방지)
-            try:
-                already = (P.ModelSetting.get('cookie_expired_notified') or 'False') == 'True'
-                if not already and self.notify_cookie_url:
-                    if send_webhook(self.notify_cookie_url,
-                                    build_cookie_expired_message()):
-                        P.ModelSetting.set('cookie_expired_notified', 'True')
-            except Exception as e:
-                P.logger.warning('쿠키 만료 알림 발송 실패: %s', e)
-            return {'ret': 'fail', 'reason': 'cookie_expired'}
+                      message=msg)
+            # 만료 알림 — 1회만 발송 (네트워크/프록시 실패는 알림 안 보냄)
+            if reason == 'cookie_expired':
+                try:
+                    already = (P.ModelSetting.get('cookie_expired_notified') or 'False') == 'True'
+                    if not already and self.notify_cookie_url:
+                        if send_webhook(self.notify_cookie_url,
+                                        build_cookie_expired_message()):
+                            P.ModelSetting.set('cookie_expired_notified', 'True')
+                except Exception as e:
+                    P.logger.warning('쿠키 만료 알림 발송 실패: %s', e)
+            return {'ret': 'fail', 'reason': reason, 'msg': msg}
 
         # 정상 verify → 만료 플래그 리셋 (다음 만료 때 다시 1회 알림 가능)
         try:
