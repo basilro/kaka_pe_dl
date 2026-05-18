@@ -26,11 +26,25 @@ def compress_episode_folder(ep_folder: str) -> Optional[str]:
 
     이미 .zip 이 있으면 그대로 둠. 이미지 파일만 포함 (소설 .txt 등은 제외).
     반환: 생성/기존 zip 경로 또는 None (실패/대상 아님).
+
+    안전장치: 폴더 안에 서브디렉토리가 있으면 회차 폴더가 아닌 작품 폴더로
+    판단하여 압축 거부 (실수로 작품 전체를 날리는 사고 방지).
     """
     import shutil
     import zipfile
     if not os.path.isdir(ep_folder):
         return None
+
+    try:
+        entries = os.listdir(ep_folder)
+    except Exception:
+        return None
+    for entry in entries:
+        if os.path.isdir(os.path.join(ep_folder, entry)):
+            P.logger.warning(
+                '압축 거부 (서브디렉토리 존재 → 회차 폴더 아님): %s', ep_folder)
+            return None
+
     parent = os.path.dirname(ep_folder)
     name = os.path.basename(ep_folder)
     zip_path = os.path.join(parent, name + '.zip')
@@ -41,14 +55,11 @@ def compress_episode_folder(ep_folder: str) -> Optional[str]:
             pass
         return zip_path
 
-    try:
-        files_to_zip = []
-        for f in sorted(os.listdir(ep_folder)):
-            path = os.path.join(ep_folder, f)
-            if os.path.isfile(path) and f.lower().endswith(_IMAGE_EXTS):
-                files_to_zip.append((f, path))
-    except Exception:
-        return None
+    files_to_zip = []
+    for f in sorted(entries):
+        path = os.path.join(ep_folder, f)
+        if os.path.isfile(path) and f.lower().endswith(_IMAGE_EXTS):
+            files_to_zip.append((f, path))
     if not files_to_zip:
         return None
 
@@ -802,10 +813,14 @@ class Worker:
 
     # ---- 회차 폴더 일괄 압축 (UI 버튼) ----
     def compress_all(self) -> dict:
-        """download_path 아래의 모든 회차 폴더를 ZIP 으로 압축.
+        """download_path/{작품}/{회차} 구조에서 '회차' 폴더만 ZIP 압축.
 
-        '회차 폴더' = 이미지 파일을 가진 폴더. info.xml/cover.jpg 만 있는
-        작품 폴더와 .txt 만 있는 소설 작품 폴더는 자동 제외 (이미지 없음).
+        '회차 폴더' = download_root 기준 정확히 depth 2 의 폴더이면서
+        - 서브디렉토리가 없고 (작품 폴더는 회차 폴더를 자식으로 가짐)
+        - 이미지 파일을 1개 이상 가진 폴더.
+
+        작품 폴더(cover.jpg/info.xml 만 있어도 회차 폴더가 자식으로 들어있음)
+        와 소설 폴더(.txt 만 — 이미지 없음)는 자동 제외.
         이미 .zip 인 회차는 건너뜀.
         """
         P.logger.info('[basic] compress_all BEGIN root=%s', self.download_root)
@@ -818,9 +833,36 @@ class Worker:
             return {'ret': 'fail', 'reason': 'no_download_path'}
 
         candidates: List[str] = []
-        for root, _dirs, files in os.walk(self.download_root):
-            if any(f.lower().endswith(_IMAGE_EXTS) for f in files):
-                candidates.append(root)
+        try:
+            series_names = sorted(os.listdir(self.download_root))
+        except Exception as e:
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message=f'다운로드 폴더 읽기 실패: {e}')
+            return {'ret': 'fail', 'reason': 'listdir_failed', 'msg': str(e)}
+
+        for series_name in series_names:
+            series_dir = os.path.join(self.download_root, series_name)
+            if not os.path.isdir(series_dir):
+                continue
+            try:
+                ep_names = sorted(os.listdir(series_dir))
+            except Exception:
+                continue
+            for ep_name in ep_names:
+                ep_dir = os.path.join(series_dir, ep_name)
+                if not os.path.isdir(ep_dir):
+                    continue
+                try:
+                    ep_entries = os.listdir(ep_dir)
+                except Exception:
+                    continue
+                has_subdir = any(
+                    os.path.isdir(os.path.join(ep_dir, e)) for e in ep_entries)
+                if has_subdir:
+                    continue
+                if not any(e.lower().endswith(_IMAGE_EXTS) for e in ep_entries):
+                    continue
+                candidates.append(ep_dir)
 
         _auto_set(titles_total=len(candidates))
         compressed = 0
