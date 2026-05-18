@@ -117,12 +117,86 @@ class KakaopageClient:
 
     # ---- 로그인 확인 ----
     def verify(self) -> bool:
-        """쿠키 유효한지 빠르게 확인 (메인 페이지 HTML에 '로그아웃' 있는지)."""
+        """쿠키 유효성 검사.
+
+        1차: 메인 페이지 HTML 에 로그인 인디케이터 패턴 다중 매칭 (관대)
+        2차: BFF 인증 endpoint 호출 — 메인 HTML 이 SPA 라 인디케이터를
+             못 찾았을 때 결정 짓는 fallback.
+
+        진단을 위해 응답 status / 쿠키 종류 / 매칭 결과를 로그에 남김.
+        """
+        # ---- 진단: 어떤 쿠키가 주입됐는지 ----
+        cookie_names = sorted({c['name'] for c in self.cookies})
+        required = ['_kau', '_karmt', '_kawlt', '_kpwtkn', '_T_ANO', '_kpdid']
+        missing = [n for n in required if n not in cookie_names]
+        self._log('info', '[verify] cookies n=%d names=%s missing=%s',
+                  len(cookie_names), ','.join(cookie_names),
+                  ','.join(missing) if missing else 'none')
+
+        # ---- 1차: 메인 페이지 HTML ----
+        html_ok = False
         try:
             r = self._session().get(PAGE + '/', timeout=15)
-            return '로그아웃' in r.text
-        except Exception:
-            return False
+            self._log('info', '[verify] page.kakao.com HTTP=%d url=%s len=%d',
+                      r.status_code, r.url, len(r.text or ''))
+            if r.status_code == 200:
+                body = r.text or ''
+                indicators = ['로그아웃', '로그 아웃', 'logout',
+                              '"isLogin":true', '"isLoggedIn":true',
+                              '/my/main', '/my/library', 'data-user-id']
+                hits = [w for w in indicators if w in body]
+                if hits:
+                    self._log('info', '[verify] HTML 인디케이터 매칭: %s', hits)
+                    html_ok = True
+                else:
+                    snippet = re.sub(r'\s+', ' ', body[:400]).strip()
+                    self._log('info',
+                              '[verify] HTML 인디케이터 없음 — SPA 가능성. '
+                              '본문 미리보기: %s', snippet[:300])
+        except Exception as e:
+            self._log('warning', '[verify] HTML 요청 예외: %s', e)
+
+        if html_ok:
+            return True
+
+        # ---- 2차: BFF 인증 endpoint ----
+        # /api/gateway/api/v1/user/main 같은 me 류 endpoint 시도.
+        # 실패해도 빠르게 다른 후보 → 하나라도 result_code=0 응답이면 OK.
+        candidates = [
+            f'{BFF}/api/gateway/api/v1/user/main',
+            f'{BFF}/api/gateway/api/v2/user/main',
+            f'{BFF}/api/gateway/api/v1/user/me',
+        ]
+        for url in candidates:
+            try:
+                rr = self._session().get(url, timeout=10)
+                self._log('info', '[verify] BFF %s HTTP=%d body[:200]=%s',
+                          url, rr.status_code, (rr.text or '')[:200])
+                if rr.status_code != 200:
+                    continue
+                try:
+                    body = rr.json()
+                except Exception:
+                    continue
+                rc = body.get('result_code', 0)
+                if rc == 0:
+                    self._log('info', '[verify] BFF OK via %s', url)
+                    return True
+                if rc == -100:
+                    # 명확한 인증 실패 — 다음 후보 시도해도 결과 동일
+                    self._log('info', '[verify] BFF 인증 거부 (-100) at %s', url)
+                    return False
+            except Exception as e:
+                self._log('info', '[verify] BFF %s 예외(계속): %s', url, e)
+
+        # 1차/2차 모두 결정 못한 경우 — 통합 로그인 쿠키 부족 의심하며 False
+        if missing:
+            self._log('warning',
+                      '[verify] 결정 짓지 못함. 누락 의심 쿠키: %s. '
+                      'accounts.kakao.com 에서 Cookie-Editor 로 .kakao.com '
+                      '도메인 쿠키도 함께 export 해서 합쳐 주세요.',
+                      ','.join(missing))
+        return False
 
     # ---- 검색 / 메타 ----
     def search_series(self, keyword: str, size: int = 25) -> List[Dict]:
