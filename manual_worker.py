@@ -53,7 +53,9 @@ _thread: Optional[threading.Thread] = None
 def get_state() -> Dict[str, Any]:
     with _state_lock:
         # shallow copy + episodes 리스트 복사 (UI에 안전한 스냅샷)
-        snap = {k: v for k, v in _state.items() if k != 'episodes'}
+        # _ 접두사 키는 내부용 (메타 캐시 등) — UI에 노출하지 않음
+        snap = {k: v for k, v in _state.items()
+                if k != 'episodes' and not k.startswith('_')}
         snap['episodes'] = [dict(e) for e in _state['episodes']]
         return snap
 
@@ -105,8 +107,10 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
         P.logger.error('[manual] cookies_json 비어있음')
         return {'ret': 'fail', 'msg': '쿠키 미설정 — 설정 페이지에서 쿠키 주입 후 다시 시도'}
 
+    proxy_url = KakaopageClient.resolve_proxy(
+        P.ModelSetting.get('use_proxy'), P.ModelSetting.get('proxy_url'))
     try:
-        cli = KakaopageClient(cookies_json, logger=P.logger)
+        cli = KakaopageClient(cookies_json, logger=P.logger, proxy_url=proxy_url)
     except AuthRequiredError as e:
         P.logger.error('[manual] 쿠키 파싱 실패: %s', e)
         return {'ret': 'fail', 'msg': f'쿠키 인증 실패: {e}'}
@@ -132,6 +136,7 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
         return {'ret': 'fail', 'msg': '회차가 없습니다'}
 
     series_title = series_item.get('title') or f'series_{series_id}'
+    is_novel = (series_item.get('category') or '') in ('웹소설', '소설')
 
     all_eps = []
     for x in eps:
@@ -159,7 +164,8 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
     _set(status='idle',
          message=f'분석 완료 — 전체 {len(all_eps)}개 중 다운로드 가능 {will_download}개',
          series_id=series_id, series_title=series_title,
-         episodes=episodes, total_to_download=will_download)
+         episodes=episodes, total_to_download=will_download,
+         _series_meta=series_item, _is_novel=is_novel)
 
     P.logger.info('[manual] analyze END series=%r total=%d will_download=%d',
                   series_title, len(all_eps), will_download)
@@ -220,13 +226,28 @@ def _run(download_root: str):
     with F.app.app_context():
         try:
             cookies_json = (P.ModelSetting.get('cookies_json') or '').strip()
-            cli = KakaopageClient(cookies_json, logger=P.logger)
+            proxy_url = KakaopageClient.resolve_proxy(
+                P.ModelSetting.get('use_proxy'),
+                P.ModelSetting.get('proxy_url'))
+            cli = KakaopageClient(cookies_json, logger=P.logger,
+                                  proxy_url=proxy_url)
             with _state_lock:
                 series_id = _state['series_id']
                 series_title = _state['series_title']
                 episodes = list(_state['episodes'])
+                series_meta = dict(_state.get('_series_meta') or {})
+                is_novel = bool(_state.get('_is_novel'))
             P.logger.info('[manual] _run series=%r episodes=%d',
                           series_title, len(episodes))
+
+            # info.xml / cover.jpg — 첫 다운로드 전에 생성
+            try:
+                from . import worker as _wkr
+                _wkr.ensure_title_metadata(cli, download_root, series_title,
+                                           series_id, series_meta,
+                                           is_novel=is_novel)
+            except Exception as e:
+                P.logger.warning('[manual] ensure_title_metadata 실패: %s', e)
 
             for idx, ep in enumerate(episodes):
                 if _cancel_flag.is_set():

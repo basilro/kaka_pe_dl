@@ -32,6 +32,8 @@ class ModuleBasic(PluginModuleBase):
             'notify_webhook_download': '',        # 웹툰 다운로드 완료 요약 발송 웹훅
             'notify_webhook_download_novel': '',  # 소설 다운로드 완료 요약 발송 웹훅
             'cookie_expired_notified': 'False',   # 쿠키 만료 알림 1회 발송 플래그
+            'use_proxy': 'False',                 # 프록시 사용 여부
+            'proxy_url': '',                      # warproxy 등. use_proxy=True + 값 있을 때만 사용
             'auto_start': 'False',
         }
         self.web_list_model = ModelKakaopageItem
@@ -55,7 +57,11 @@ class ModuleBasic(PluginModuleBase):
             if command == 'verify_cookies':
                 from .client import KakaopageClient, AuthRequiredError
                 try:
-                    cli = KakaopageClient(P.ModelSetting.get('cookies_json'), logger=P.logger)
+                    proxy_url = KakaopageClient.resolve_proxy(
+                        P.ModelSetting.get('use_proxy'),
+                        P.ModelSetting.get('proxy_url'))
+                    cli = KakaopageClient(P.ModelSetting.get('cookies_json'),
+                                          logger=P.logger, proxy_url=proxy_url)
                     ok = cli.verify()
                     ret = {'ret': 'success' if ok else 'fail',
                            'msg': '쿠키 유효 (로그인 상태 확인됨)' if ok else '쿠키 만료/무효 — 재주입 필요'}
@@ -63,6 +69,8 @@ class ModuleBasic(PluginModuleBase):
                     ret = {'ret': 'fail', 'msg': str(e)}
             elif command == 'run_now':
                 ret = self.do_action()
+            elif command == 'sync_metadata':
+                ret = self.do_action_sync_metadata()
             # ---- 수동 다운로드 (명령 이름에서 manual_ 접두사 제거 — 라우터 충돌 회피) ----
             elif command == 'mrun':
                 from . import manual_worker
@@ -162,3 +170,22 @@ class ModuleBasic(PluginModuleBase):
             P.logger.error('[basic] do_action Exception: %s', e)
             P.logger.error(traceback.format_exc())
             return {'ret': 'fail', 'msg': str(e)}
+
+    def do_action_sync_metadata(self):
+        """체크할 작품 전체의 info.xml / cover.jpg 누락분 백그라운드 동기화."""
+        import threading
+        from . import worker as auto_worker
+        if auto_worker.get_auto_state().get('status') == 'running':
+            return {'ret': 'fail', 'msg': '이미 자동 다운로드 실행 중'}
+
+        def _bg():
+            try:
+                with F.app.app_context():
+                    Worker().sync_metadata_all()
+            except Exception as e:
+                P.logger.error('[basic] sync_metadata run Exception: %s', e)
+                P.logger.error(traceback.format_exc())
+
+        threading.Thread(target=_bg, daemon=True).start()
+        return {'ret': 'success',
+                'msg': '메타 동기화 시작됨 — "진행 상황" 메뉴에서 확인'}
