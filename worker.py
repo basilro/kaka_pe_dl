@@ -763,6 +763,9 @@ class Worker:
 
         rec.updated_time = datetime.now()
 
+        # 알림 분류용 — locked 분기에서 ticket_used_type 보고 갱신
+        kind = 'free'  # 'free' | 'waitfree' | 'ticket'
+
         # ---- ticket 단계 (잠금 회차만) ----
         if availability == 'locked':
             rec.status = 'using_ticket'; db.session.commit()
@@ -831,6 +834,8 @@ class Worker:
 
             # 마지막으로 성공한 type (tries 순서 그대로 시도하므로 break 시점의 마지막 element)
             ticket_used_type = tried_types[-1]
+            # 알림 분류: RT05=기다무, 그 외(RT01 등)=일반 대여권
+            kind = 'waitfree' if ticket_used_type == 'RT05' else 'ticket'
             rec.ticket_uid = used.get('ticket_uid')
             rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
             db.session.commit()
@@ -953,6 +958,7 @@ class Worker:
                 'series_title': series_title,
                 'episode_title': episode_title,
                 'episode_no': ep_no,
+                'kind': kind,  # 'free' | 'waitfree' | 'ticket'
             }
             if viewer_type == 'TextViewerData':
                 self.completed_novel.append(entry)
