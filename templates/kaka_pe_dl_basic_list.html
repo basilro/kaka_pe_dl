@@ -14,7 +14,14 @@
             <option value="pending">대기</option>
           </select>
         </span>
-        <span class="col-md-7">
+        <span class="col-md-2">
+          <select id="kind_filter" class="form-control form-control-sm" title="종류 필터 (클라이언트 사이드)">
+            <option value="all">웹툰+소설</option>
+            <option value="comic">웹툰만</option>
+            <option value="novel">소설만</option>
+          </select>
+        </span>
+        <span class="col-md-5">
           <input id="search_word" name="search_word" class="form-control form-control-sm w-75" type="text" placeholder="작품/회차 검색" aria-label="Search">
           <button id="search" class="btn btn-sm btn-outline-success">검색</button>
           <button id="reset_btn" class="btn btn-sm btn-outline-success">리셋</button>
@@ -49,6 +56,7 @@
 var package_name = "{{ arg['package_name'] }}";
 var current_data = null;
 var dataList = null;
+var raw_data = null;  // 종류 필터 재적용용 원본 보관
 
 function fmtBytes(n){
   if(!n) return '-';
@@ -65,16 +73,44 @@ function statusBadge(s){
   return '<span class="badge badge-' + cls + '">' + (s || '-') + '</span>';
 }
 
+// save_dir 경로로 종류 추정 — 폴더 규칙 {download_root}/{webtoon|novel}/{title}/...
+function detectKind(item){
+  var p = (item && item.save_dir || '').toLowerCase().replace(/\\/g, '/');
+  if (p.indexOf('/novel/') >= 0) return 'novel';
+  if (p.indexOf('/webtoon/') >= 0) return 'comic';
+  return 'unknown';
+}
+function kindBadge(k){
+  if (k === 'novel') return '<span class="badge badge-info" style="margin-left:6px;">소설</span>';
+  if (k === 'comic') return '<span class="badge badge-primary" style="margin-left:6px;">웹툰</span>';
+  return '';
+}
+
 function make_list(data) {
+  // 서버에서 새 페이지가 올 때만 raw_data 갱신 — 같은 페이지에서 종류 필터만 바꿀 땐 호출자가 raw_data 를 직접 넘김
+  if (data !== raw_data) raw_data = data;
+  // 클라이언트 사이드 종류 필터 (현재 페이지 내에서만 거름 — 페이지네이션은 서버 기준)
+  var kindSel = $('#kind_filter').val() || 'all';
+  var filtered = data;
+  if (kindSel !== 'all') {
+    filtered = data.filter(function(it){ return detectKind(it) === kindSel; });
+  }
   var str = '';
-  for (var i in data) {
-    var item = data[i];
+  if (kindSel !== 'all' && filtered.length === 0 && data.length > 0) {
+    str += '<div style="padding:10px; color:#888;">'
+        +    '이 페이지에 ' + (kindSel === 'novel' ? '소설' : '웹툰')
+        +    ' 항목이 없습니다. 다른 페이지를 확인하거나 "웹툰+소설"로 보세요.'
+        +  '</div>';
+  }
+  for (var i in filtered) {
+    var item = filtered[i];
+    var k = detectKind(item);
     str += '<div class="row" style="padding-top:4px; padding-bottom:4px; align-items:center;">';
     str += '<div class="col-sm-1" style="text-align:center;">';
     str +=   '<input type="checkbox" class="row-check" data-id="' + item.id + '"/>';
     str += '</div>';
     str += '<div class="col-sm-3" style="word-break:break-all;">';
-    str +=   '<strong>' + (item.series_title || '-') + '</strong><br/>';
+    str +=   '<strong>' + (item.series_title || '-') + '</strong>' + kindBadge(k) + '<br/>';
     str +=   '<small>' + (item.episode_title || '-') + '</small>';
     str += '</div>';
     str += '<div class="col-sm-1" style="text-align:center;">';
@@ -91,10 +127,10 @@ function make_list(data) {
     str +=   '<button class="btn btn-sm btn-outline-danger del-btn" data-id="' + item.id + '">삭제</button>';
     str += '</div>';
     str += '</div>';
-    if (i != data.length - 1) str += '<hr style="width:100%; margin:5px;" />';
+    if (i != filtered.length - 1) str += '<hr style="width:100%; margin:5px;" />';
   }
-  dataList = data;
-  current_data = {list: data};
+  dataList = filtered;
+  current_data = {list: filtered};
   document.getElementById("list_div").innerHTML = str;
   // 새 list 그리면 헤더 체크박스/카운트 초기화
   $('#check_all').prop('checked', false);
@@ -131,7 +167,17 @@ $("#reset_btn").click(function(e) {
   e.preventDefault();
   document.getElementById("search_word").value = '';
   document.getElementById("option").value = 'all';
+  document.getElementById("kind_filter").value = 'all';
   globalRequestSearch("1");
+});
+
+// 종류 셀렉트 변경 시 — 현재 데이터 즉시 재필터링 (현재 페이지 내에서만)
+$('body').on('change', '#kind_filter', function(){
+  if (raw_data) {
+    make_list(raw_data);
+  } else {
+    globalRequestSearch("1");
+  }
 });
 
 $('body').on('click', '.del-btn', function(e){
