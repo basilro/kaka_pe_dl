@@ -132,6 +132,70 @@ class ModuleBasic(PluginModuleBase):
                     ok = send_webhook(url, msg)
                     ret = {'ret': 'success' if ok else 'fail',
                            'msg': '발송 성공' if ok else '발송 실패 (URL/형식 확인)'}
+            elif command == 'resolve_titles':
+                # 설정 textarea의 토큰들을 DB로 조회해 series_id ↔ series_title 매칭.
+                # arg1: 줄바꿈/|로 구분된 raw 텍스트 (그대로 전달)
+                # 반환: {ret, items: [{token, kind, series_id, series_title}]}
+                import re as _re
+                raw = (arg1 or '').strip()
+                tokens = []
+                for chunk in raw.replace('\r', '\n').split('\n'):
+                    for t in chunk.split('|'):
+                        t = t.strip()
+                        if t:
+                            tokens.append(t)
+
+                def _to_series_id(s):
+                    s = s.strip()
+                    if s.isdigit():
+                        return int(s)
+                    m = _re.search(r'content/(\d+)', s)
+                    if m:
+                        return int(m.group(1))
+                    return None
+
+                wanted_ids = set()
+                token_to_id = {}
+                for t in tokens:
+                    sid = _to_series_id(t)
+                    if sid is not None:
+                        token_to_id[t] = sid
+                        wanted_ids.add(sid)
+
+                id_to_row = {}
+                if wanted_ids:
+                    rows = (db.session.query(
+                                ModelKakaopageItem.series_id,
+                                ModelKakaopageItem.series_title,
+                                ModelKakaopageItem.save_dir)
+                            .filter(ModelKakaopageItem.series_id.in_(wanted_ids))
+                            .all())
+                    for sid, stitle, sdir in rows:
+                        if sid in id_to_row:
+                            continue
+                        kind = 'unknown'
+                        sd = (sdir or '').lower().replace('\\', '/')
+                        if '/novel/' in sd:
+                            kind = 'novel'
+                        elif '/webtoon/' in sd:
+                            kind = 'comic'
+                        id_to_row[sid] = {
+                            'series_id': sid,
+                            'series_title': stitle or '',
+                            'kind': kind,
+                        }
+
+                items = []
+                for t in tokens:
+                    sid = token_to_id.get(t)
+                    info = id_to_row.get(sid) if sid is not None else None
+                    items.append({
+                        'token': t,
+                        'series_id': sid,
+                        'series_title': (info or {}).get('series_title', ''),
+                        'kind': (info or {}).get('kind', 'unknown'),
+                    })
+                ret = {'ret': 'success', 'items': items}
             elif command == 'db_delete_items':
                 # arg1 = 콤마구분 id 문자열
                 ids = []
