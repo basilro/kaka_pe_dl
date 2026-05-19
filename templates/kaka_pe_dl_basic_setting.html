@@ -28,11 +28,45 @@
                   '예) content/67479044',
                   '예) 67479044']) }}
 
+        <div class="form-group row" style="margin-top:-10px;">
+          <label class="col-form-label col-md-2"></label>
+          <div class="col-md-10">
+            <div style="margin-bottom:6px;">
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                      id="titlesNormalizeBtn">정렬 + 중복 제거</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                      id="titlesResolveBtn">ID → 제목 풀이</button>
+              <span id="titlesStat" style="margin-left:10px; color:#666;"></span>
+            </div>
+            <div id="titlesPreview" class="preview-pane"
+                 style="border:1px solid #e0e0e0; border-radius:4px; padding:8px;
+                        min-height:36px; max-height:220px; overflow-y:auto;
+                        background:#fafafa; line-height:2.0;"></div>
+          </div>
+        </div>
+
         {{ macros.setting_input_textarea('titles_novel', '체크할 소설',
             value=arg['titles_novel'], row='5',
             desc=['웹소설용. 한 줄에 하나씩 (또는 | 로 구분).',
                   '제목/URL/숫자/path 모두 가능.',
                   '예) 은해상단 막내아들  또는  content/62112560']) }}
+
+        <div class="form-group row" style="margin-top:-10px;">
+          <label class="col-form-label col-md-2"></label>
+          <div class="col-md-10">
+            <div style="margin-bottom:6px;">
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                      id="titlesNovelNormalizeBtn">정렬 + 중복 제거</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                      id="titlesNovelResolveBtn">ID → 제목 풀이</button>
+              <span id="titlesNovelStat" style="margin-left:10px; color:#666;"></span>
+            </div>
+            <div id="titlesNovelPreview" class="preview-pane"
+                 style="border:1px solid #e0e0e0; border-radius:4px; padding:8px;
+                        min-height:36px; max-height:220px; overflow-y:auto;
+                        background:#fafafa; line-height:2.0;"></div>
+          </div>
+        </div>
 
         {{ macros.setting_input_textarea('cookies_json', '카카오 쿠키 (Cookie-Editor JSON)',
             value=arg['cookies_json'], row='6',
@@ -198,5 +232,174 @@ function _notifyTest(kind){
 $('body').on('click', '#notifyTestCookieBtn',       function(e){ e.preventDefault(); _notifyTest('cookie'); });
 $('body').on('click', '#notifyTestDownloadBtn',     function(e){ e.preventDefault(); _notifyTest('download'); });
 $('body').on('click', '#notifyTestDownloadNovelBtn',function(e){ e.preventDefault(); _notifyTest('download_novel'); });
+
+/* ===== 작품 목록 미리보기 / 정규화 / DB 매칭 ===== */
+function _parseTokens(raw){
+  var out = [];
+  if (!raw) return out;
+  var parts = raw.replace(/\r/g, '\n').split('\n');
+  for (var i = 0; i < parts.length; i++){
+    var sub = parts[i].split('|');
+    for (var j = 0; j < sub.length; j++){
+      var t = sub[j].trim();
+      if (t) out.push(t);
+    }
+  }
+  return out;
+}
+function _tokenToSeriesId(s){
+  if (/^\d+$/.test(s)) return s;
+  var m = s.match(/content\/(\d+)/);
+  return m ? m[1] : null;
+}
+function _normalKey(s){
+  var sid = _tokenToSeriesId(s);
+  if (sid !== null) return 'id:' + sid;
+  return 'name:' + s.toLowerCase();
+}
+function _esc(s){
+  return String(s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+/* preview_id, stat_id 한 쌍의 패널을 textarea_id 기준으로 갱신.
+   resolve_map = {token: {series_id, series_title, kind}}  (없으면 빈 객체) */
+function _renderPreview(textarea_id, preview_id, stat_id, resolve_map){
+  resolve_map = resolve_map || {};
+  var raw = $('#' + textarea_id).val() || '';
+  var tokens = _parseTokens(raw);
+  var seen = {};
+  var dup_count = 0;
+  var html = [];
+  for (var i = 0; i < tokens.length; i++){
+    var t = tokens[i];
+    var key = _normalKey(t);
+    var is_dup = !!seen[key];
+    if (is_dup) dup_count++;
+    seen[key] = true;
+    var info = resolve_map[t] || null;
+    var sid = _tokenToSeriesId(t);
+    var label;
+    if (info && info.series_title) {
+      label = _esc(info.series_title);
+      if (sid !== null) label += ' <small style="opacity:.6;">#' + _esc(sid) + '</small>';
+      var kbadge = '';
+      if (info.kind === 'novel') kbadge = '<span class="badge badge-info" style="margin-left:4px;">소설</span>';
+      else if (info.kind === 'comic') kbadge = '<span class="badge badge-primary" style="margin-left:4px;">웹툰</span>';
+      label += kbadge;
+    } else if (sid !== null) {
+      label = '#' + _esc(sid) + ' <small style="opacity:.6;">(미해결)</small>';
+    } else {
+      label = _esc(t);
+    }
+    var bg = is_dup ? '#fdecea' : '#fff';
+    var bd = is_dup ? '#e57373' : '#ccc';
+    var title_attr = is_dup ? '중복 항목' : (info && info.series_title ? '원본 토큰: ' + t : '');
+    html.push('<span class="badge" style="background:' + bg
+              + ';border:1px solid ' + bd
+              + ';color:#222;margin:2px 4px 2px 0;padding:4px 8px;font-weight:normal;"'
+              + ' title="' + _esc(title_attr) + '">'
+              + label + '</span>');
+  }
+  $('#' + preview_id).html(html.length ? html.join('') : '<span style="color:#999;">(비어 있음)</span>');
+  var unique_count = Object.keys(seen).length;
+  $('#' + stat_id).text('총 ' + tokens.length + '개'
+                        + (dup_count > 0 ? ' / 중복 ' + dup_count + '개' : '')
+                        + (unique_count !== tokens.length ? ' / 고유 ' + unique_count + '개' : ''));
+}
+
+/* 캐시: 마지막으로 받아온 resolve_map (textarea_id 별) */
+var _resolveCache = {};
+
+function _refreshPreview(textarea_id, preview_id, stat_id){
+  _renderPreview(textarea_id, preview_id, stat_id, _resolveCache[textarea_id]);
+}
+
+function _doResolve(textarea_id, preview_id, stat_id, silent){
+  var raw = $('#' + textarea_id).val() || '';
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'resolve_titles', arg1: raw},
+         function(data){
+    if (data && data.ret === 'success' && Array.isArray(data.items)) {
+      var map = {};
+      for (var i = 0; i < data.items.length; i++){
+        var it = data.items[i];
+        map[it.token] = it;
+      }
+      _resolveCache[textarea_id] = map;
+      _renderPreview(textarea_id, preview_id, stat_id, map);
+      if (!silent) $.notify('DB 매칭 완료', {className: 'success'});
+    } else if (!silent) {
+      $.notify((data && data.msg) || 'DB 매칭 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    if (!silent) $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+}
+
+/* 정렬 + 중복 제거: 해결된 제목이 있으면 그걸로 대체해서 깔끔하게 정렬.
+   원본 토큰을 보존하기 위해 series_id 기준 dedupe → 대표 토큰 1개 유지. */
+function _normalizeTextarea(textarea_id, preview_id, stat_id){
+  var raw = $('#' + textarea_id).val() || '';
+  var tokens = _parseTokens(raw);
+  var resolve_map = _resolveCache[textarea_id] || {};
+  var seen = {};
+  var kept = [];
+  for (var i = 0; i < tokens.length; i++){
+    var t = tokens[i];
+    var key = _normalKey(t);
+    if (seen[key]) continue;
+    seen[key] = true;
+    var info = resolve_map[t];
+    if (info && info.series_title) {
+      kept.push({sort_key: info.series_title, value: info.series_title});
+    } else {
+      kept.push({sort_key: t, value: t});
+    }
+  }
+  kept.sort(function(a, b){
+    return a.sort_key.localeCompare(b.sort_key, 'ko');
+  });
+  var values = kept.map(function(x){ return x.value; });
+  $('#' + textarea_id).val(values.join('\n'));
+  _refreshPreview(textarea_id, preview_id, stat_id);
+}
+
+/* 디바운스 핸들러 */
+function _debounce(fn, ms){
+  var t = null;
+  return function(){
+    var ctx = this, args = arguments;
+    clearTimeout(t);
+    t = setTimeout(function(){ fn.apply(ctx, args); }, ms);
+  };
+}
+
+$(document).ready(function(){
+  var pairs = [
+    {ta:'titles',       pv:'titlesPreview',       st:'titlesStat',
+     btn_norm:'titlesNormalizeBtn',       btn_res:'titlesResolveBtn'},
+    {ta:'titles_novel', pv:'titlesNovelPreview', st:'titlesNovelStat',
+     btn_norm:'titlesNovelNormalizeBtn', btn_res:'titlesNovelResolveBtn'},
+  ];
+  pairs.forEach(function(p){
+    _refreshPreview(p.ta, p.pv, p.st);
+    var dbInput = _debounce(function(){ _refreshPreview(p.ta, p.pv, p.st); }, 250);
+    $('body').on('input', '#' + p.ta, dbInput);
+    $('body').on('click', '#' + p.btn_norm, function(e){
+      e.preventDefault();
+      _normalizeTextarea(p.ta, p.pv, p.st);
+    });
+    $('body').on('click', '#' + p.btn_res, function(e){
+      e.preventDefault();
+      _doResolve(p.ta, p.pv, p.st);
+    });
+  });
+  /* 페이지 로드 시 1회 자동 resolve (silent — 토스트 안 띄움) */
+  setTimeout(function(){
+    pairs.forEach(function(p){ _doResolve(p.ta, p.pv, p.st, true); });
+  }, 300);
+});
 </script>
 {% endblock %}
