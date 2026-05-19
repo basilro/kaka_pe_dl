@@ -383,6 +383,9 @@ class Worker:
         # 알림용 누적 — 웹툰/소설 분리
         self.completed_webtoon: List[Dict[str, Any]] = []
         self.completed_novel: List[Dict[str, Any]] = []
+        # 완결+전회차완료 → settings에서 자동 제거할 항목 누적
+        # {'raw': 원본 토큰, 'is_novel': bool, 'title': 표시 제목}
+        self.to_remove: List[Dict[str, Any]] = []
 
     @staticmethod
     def _split_items(raw: str) -> List[str]:
@@ -505,11 +508,82 @@ class Worker:
             except Exception as e:
                 P.logger.warning('소설 다운로드 요약 알림 예외: %s', e)
 
+        # ---- 완결+전회차완료 작품: settings에서 자동 제거 ----
+        removed_msg = ''
+        if self.to_remove:
+            try:
+                removed_titles = self._apply_settings_removal()
+                if removed_titles:
+                    removed_msg = f", 완결제거 {len(removed_titles)}"
+                    P.logger.info('[basic] 완결 자동 제거 완료: %s',
+                                  ', '.join(removed_titles))
+            except Exception as e:
+                P.logger.warning('[basic] 완결 자동 제거 적용 실패: %s', e)
+
         _auto_set(status='done', finished_at=datetime.now().isoformat(),
                   current_title='', current_phase='', current_episode='',
                   message=(f"완료 — 다운 {summary['downloaded']}, 스킵 {summary['skipped']}, "
-                           f"실패 {summary['failed']}"))
+                           f"실패 {summary['failed']}{removed_msg}"))
         return {'ret': 'success', **summary}
+
+    # ---- settings textarea에서 완결 작품 raw 토큰 제거 ----
+    def _apply_settings_removal(self) -> List[str]:
+        """self.to_remove 의 항목들을 'titles' / 'titles_novel' 설정에서 제거.
+
+        - is_novel 여부에 따라 다른 key 사용
+        - 줄/| 구분 구조 유지 (해당 토큰만 제외하고 재조립)
+        - 토큰 매칭은 strip() 후 정확히 일치
+        반환: 실제로 제거된 작품 표시 제목 리스트.
+        """
+        if not self.to_remove:
+            return []
+
+        removed_titles: List[str] = []
+        groups: Dict[str, List[Dict[str, Any]]] = {
+            'titles': [], 'titles_novel': []}
+        for entry in self.to_remove:
+            key = 'titles_novel' if entry['is_novel'] else 'titles'
+            groups[key].append(entry)
+
+        for key, entries in groups.items():
+            if not entries:
+                continue
+            raw_to_title = {}
+            for e in entries:
+                r = (e.get('raw') or '').strip()
+                if r:
+                    raw_to_title[r] = e.get('title') or r
+            if not raw_to_title:
+                continue
+            try:
+                current = P.ModelSetting.get(key) or ''
+            except Exception as e:
+                P.logger.warning('[basic] %s 읽기 실패: %s', key, e)
+                continue
+            lines_out: List[str] = []
+            matched: set = set()
+            for line in current.replace('\r', '').split('\n'):
+                parts = line.split('|')
+                kept = []
+                for p in parts:
+                    if p.strip() in raw_to_title:
+                        matched.add(p.strip())
+                        continue
+                    kept.append(p)
+                if all(not s.strip() for s in kept):
+                    continue
+                lines_out.append('|'.join(kept))
+            if not matched:
+                P.logger.warning('[basic] %s 에서 제거 대상 토큰 미발견 — 사용자가 이미 편집했을 수 있음', key)
+                continue
+            new_value = '\n'.join(lines_out)
+            try:
+                P.ModelSetting.set(key, new_value)
+                for r in matched:
+                    removed_titles.append(raw_to_title[r])
+            except Exception as e:
+                P.logger.warning('[basic] %s 저장 실패: %s', key, e)
+        return removed_titles
 
     # ---- per item (제목/URL/숫자 어느 형태든 처리) ----
     def _process_item(self, item: Dict[str, Any]) -> str:
@@ -537,9 +611,11 @@ class Worker:
             P.logger.info('[%s] [%s] 검색→ series_id=%s title=%r',
                           kind_label, raw, series_id, display_title)
 
-        return self._process_series(display_title, series_id, is_novel)
+        return self._process_series(display_title, series_id, is_novel,
+                                    raw_token=raw)
 
-    def _process_series(self, title: str, series_id: int, is_novel: bool) -> str:
+    def _process_series(self, title: str, series_id: int, is_novel: bool,
+                        raw_token: str = '') -> str:
 
         # 회차 목록 — 첫 ANCHOR 응답 직후 즉시 series 제목으로 화면 갱신 (PREV/NEXT 페이징은 길 수 있음)
         _auto_set(current_phase='fetch_episodes')
@@ -690,6 +766,33 @@ class Worker:
 
                 wf = wf2
                 my = my2
+
+        # ---- 완결 + 모든 회차 다운 완료 시 settings에서 자동 제거 ----
+        try:
+            on_issue = ((series_meta or {}).get('on_issue') or '').upper()
+            if raw_token and on_issue == 'N' and eps:
+                all_completed = True
+                missing = 0
+                for x in eps:
+                    pid = (x.get('item') or {}).get('product_id')
+                    if not pid:
+                        continue
+                    rec = (db.session.query(ModelKakaopageItem)
+                           .filter_by(product_id=pid).first())
+                    if not rec or rec.status != 'completed':
+                        all_completed = False
+                        missing += 1
+                if all_completed:
+                    self.to_remove.append({
+                        'raw': raw_token, 'is_novel': is_novel, 'title': title,
+                    })
+                    P.logger.info('[%s] 완결+전회차완료 감지 → settings 제거 대상 (raw=%r)',
+                                  title, raw_token)
+                else:
+                    P.logger.debug('[%s] 완결이지만 미완료 회차 %d개 — 제거 보류',
+                                   title, missing)
+        except Exception as e:
+            P.logger.warning('[%s] 완결 자동 제거 체크 예외: %s', title, e)
 
         return 'downloaded' if downloaded_count else 'skipped'
 
