@@ -916,15 +916,16 @@ class Worker:
 
     # ---- 회차 폴더 일괄 압축 (UI 버튼) ----
     def compress_all(self) -> dict:
-        """download_path/{작품}/{회차} 구조에서 '회차' 폴더만 ZIP 압축.
+        """download_path 트리에서 '회차 폴더'를 찾아 ZIP 압축.
 
-        '회차 폴더' = download_root 기준 정확히 depth 2 의 폴더이면서
-        - 서브디렉토리가 없고 (작품 폴더는 회차 폴더를 자식으로 가짐)
-        - 이미지 파일을 1개 이상 가진 폴더.
+        '회차 폴더' = 서브디렉토리가 없고(=leaf) 이미지 파일을 1개 이상 가진 폴더.
 
-        작품 폴더(cover.jpg/info.xml 만 있어도 회차 폴더가 자식으로 들어있음)
-        와 소설 폴더(.txt 만 — 이미지 없음)는 자동 제외.
-        이미 .zip 인 회차는 건너뜀.
+        실제 구조: download_root/{webtoon|novel}/{작품}/{회차}/이미지...
+        그러므로 depth 고정으로 찾으면 작품 폴더(서브디렉토리 보유)나
+        novel 폴더(.txt 만)는 자동으로 걸러진다. os.walk 로 깊이에 무관하게 탐색.
+
+        작품 폴더(cover.jpg/info.xml + 회차 서브폴더)와 소설 폴더(.txt 만)는
+        leaf+이미지 조건으로 자동 제외. 이미 .zip 인 회차는 건너뜀.
         """
         P.logger.info('[basic] compress_all BEGIN root=%s', self.download_root)
         _auto_reset()
@@ -936,36 +937,25 @@ class Worker:
             return {'ret': 'fail', 'reason': 'no_download_path'}
 
         candidates: List[str] = []
+        root_abs = os.path.abspath(self.download_root)
         try:
-            series_names = sorted(os.listdir(self.download_root))
+            for cur_dir, sub_dirs, sub_files in os.walk(self.download_root):
+                # leaf 만 (서브디렉토리 있으면 작품 폴더 — skip)
+                if sub_dirs:
+                    continue
+                # download_root 자체는 제외
+                if os.path.abspath(cur_dir) == root_abs:
+                    continue
+                # 이미지 파일이 1개 이상 있어야 함 (소설 .txt 폴더 자동 제외)
+                if not any(f.lower().endswith(_IMAGE_EXTS) for f in sub_files):
+                    continue
+                candidates.append(cur_dir)
         except Exception as e:
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
-                      message=f'다운로드 폴더 읽기 실패: {e}')
-            return {'ret': 'fail', 'reason': 'listdir_failed', 'msg': str(e)}
+                      message=f'다운로드 폴더 탐색 실패: {e}')
+            return {'ret': 'fail', 'reason': 'walk_failed', 'msg': str(e)}
 
-        for series_name in series_names:
-            series_dir = os.path.join(self.download_root, series_name)
-            if not os.path.isdir(series_dir):
-                continue
-            try:
-                ep_names = sorted(os.listdir(series_dir))
-            except Exception:
-                continue
-            for ep_name in ep_names:
-                ep_dir = os.path.join(series_dir, ep_name)
-                if not os.path.isdir(ep_dir):
-                    continue
-                try:
-                    ep_entries = os.listdir(ep_dir)
-                except Exception:
-                    continue
-                has_subdir = any(
-                    os.path.isdir(os.path.join(ep_dir, e)) for e in ep_entries)
-                if has_subdir:
-                    continue
-                if not any(e.lower().endswith(_IMAGE_EXTS) for e in ep_entries):
-                    continue
-                candidates.append(ep_dir)
+        candidates.sort()
 
         _auto_set(titles_total=len(candidates))
         compressed = 0
