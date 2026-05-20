@@ -52,12 +52,20 @@ class ModelKakaopageItem(ModelBase):
         query = db.session.query(cls)
         opt = (req.form.get('option') or option1 or 'all').strip()
         kw = (req.form.get('search_word') or req.form.get('keyword') or search or '').strip()
+        kind = (req.form.get('kind_filter') or 'all').strip()
         if opt and opt != 'all':
             query = query.filter(cls.status == opt)
         if kw:
             pat = f'%{kw}%'
             query = query.filter(or_(cls.series_title.like(pat),
                                      cls.episode_title.like(pat)))
+        if kind == 'novel':
+            # save_dir 에 /novel/ 또는 \novel\ 포함 (OS 별 구분자)
+            query = query.filter(or_(cls.save_dir.like('%/novel/%'),
+                                     cls.save_dir.like('%\\novel\\%')))
+        elif kind == 'comic':
+            query = query.filter(or_(cls.save_dir.like('%/webtoon/%'),
+                                     cls.save_dir.like('%\\webtoon\\%')))
         if order == 'desc':
             query = query.order_by(desc(cls.id))
         else:
