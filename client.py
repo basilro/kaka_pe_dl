@@ -227,15 +227,49 @@ class KakaopageClient:
         body = self._check(self._json(r))
         return body.get('result', {}).get('list', []) or []
 
-    def find_series(self, title: str, category: str = '웹툰') -> Optional[Dict]:
-        """검색 결과 중 정확히 일치하는 작품 1개 선택."""
+    # BFF 가 반환하는 category 값들 — 같은 제목이 웹툰/소설 양쪽에 존재할 때
+    # 잘못된 종류 매칭을 막기 위한 화이트리스트.
+    NOVEL_CATEGORIES = ('웹소설', '소설')
+    COMIC_CATEGORIES = ('웹툰', '만화')
+
+    def find_series(self, title: str, category='웹툰') -> Optional[Dict]:
+        """검색 결과 중 정확히 일치하는 작품 1개 선택.
+
+        category: 문자열(legacy), 빈 문자열(any), 또는 tuple/list(여러 허용값).
+                  빈/None 이면 카테고리 필터 안 함 (어떤 카테고리든 허용).
+                  값이 있으면 반대 종류 카테고리는 **반드시 제외** —
+                  '같은 제목, 다른 종류' 오매칭 방지.
+        """
         items = self.search_series(title)
+        if not category:
+            wanted = set()
+            forbidden = set()
+        else:
+            if isinstance(category, (list, tuple, set)):
+                wanted = set(category)
+            else:
+                wanted = {category}
+            if wanted & set(self.NOVEL_CATEGORIES):
+                forbidden = set(self.COMIC_CATEGORIES) - wanted
+            elif wanted & set(self.COMIC_CATEGORIES):
+                forbidden = set(self.NOVEL_CATEGORIES) - wanted
+            else:
+                forbidden = set()
+        # 1차: title + 원하는 category 일치
         for it in items:
-            if it.get('title') == title and (not category or it.get('category') == category):
+            if it.get('title') != title:
+                continue
+            cat = it.get('category') or ''
+            if wanted and cat in wanted:
                 return it
+        # 2차: title 일치 + 반대 종류 카테고리는 제외 (카테고리 미상/기타는 허용)
         for it in items:
-            if it.get('title') == title:
-                return it
+            if it.get('title') != title:
+                continue
+            cat = it.get('category') or ''
+            if forbidden and cat in forbidden:
+                continue
+            return it
         return None
 
     def _fetch_product_list(self, series_id: int, cursor_index: int,

@@ -598,13 +598,14 @@ class Worker:
             display_title = raw  # 임시 — _process_series에서 실제 제목으로 덮어씀
             P.logger.info('[%s] [%s] series_id 직접: %s', kind_label, raw, series_id)
         else:
-            # 2) 제목 → 검색
-            category = '웹소설' if is_novel else '웹툰'
+            # 2) 제목 → 검색. 같은 제목이 웹툰/소설 양쪽에 존재할 수 있어 카테고리 필수.
+            #    소설은 BFF가 '웹소설' 또는 '소설'로 응답하므로 둘 다 허용.
+            category = (KakaopageClient.NOVEL_CATEGORIES
+                        if is_novel else KakaopageClient.COMIC_CATEGORIES)
             series = self.client.find_series(raw, category=category)
             if not series:
-                series = self.client.find_series(raw, category='')
-            if not series:
-                P.logger.warning('[%s] [%s] 검색 결과 매칭 실패', kind_label, raw)
+                P.logger.warning('[%s] [%s] 검색 결과 매칭 실패 (반대 종류로 잘못 매칭 방지)',
+                                 kind_label, raw)
                 return 'failed'
             series_id = series['series_id']
             display_title = series.get('title') or raw
@@ -848,10 +849,9 @@ class Worker:
             try:
                 sid = KakaopageClient.extract_series_id(raw)
                 if sid is None:
-                    category = '웹소설' if is_novel else '웹툰'
+                    category = (KakaopageClient.NOVEL_CATEGORIES
+                                if is_novel else KakaopageClient.COMIC_CATEGORIES)
                     series = self.client.find_series(raw, category=category)
-                    if not series:
-                        series = self.client.find_series(raw, category='')
                     if not series:
                         summary['failed'] += 1
                         continue
