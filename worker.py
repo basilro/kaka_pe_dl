@@ -1,4 +1,5 @@
 """스케줄 1회 실행 단위 — 제목 리스트를 돌면서 다운로드 시도."""
+import functools
 import os
 import re
 import threading
@@ -358,6 +359,43 @@ def _auto_summary_inc(key: str, delta: int = 1):
         _auto_state['summary'][key] = _auto_state['summary'].get(key, 0) + delta
 
 
+# ---- 전역 상호배제 락 ----
+# 다운로드(자동/수동)·압축·메타동기화가 절대 동시에 돌지 않게 한다.
+# 한쪽이 회차 폴더를 zip+삭제(rmtree)하는 사이 다른 쪽이 같은 폴더에 쓰다가
+# 폴더가 사라지는 사고(ENOENT 무더기)를 막는다. 스케줄러 run() 에는 가드가
+# 없었고 버튼 액션들은 click 시점 status 만 봐서(check-then-act) 겹칠 수 있었다.
+_run_lock = threading.Lock()
+
+
+def try_acquire_run_lock() -> bool:
+    """수동 워커 등 외부에서 전역 락을 비차단으로 잡는다. 성공 시 True."""
+    return _run_lock.acquire(blocking=False)
+
+
+def release_run_lock() -> None:
+    try:
+        _run_lock.release()
+    except RuntimeError:
+        pass
+
+
+def _exclusive(fn):
+    """전역 락을 잡고 메서드를 실행. 이미 다른 작업이 돌고 있으면 즉시 busy 반환.
+
+    busy 일 때는 _auto_reset() 등으로 진행 중인 작업의 상태를 건드리지 않는다.
+    """
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        if not _run_lock.acquire(blocking=False):
+            P.logger.info('[basic] %s skip — 다른 작업이 이미 실행 중', fn.__name__)
+            return {'ret': 'fail', 'reason': 'busy', 'msg': '다른 작업 실행 중'}
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            _run_lock.release()
+    return wrapper
+
+
 class Worker:
 
     def __init__(self):
@@ -397,6 +435,7 @@ class Worker:
         return out
 
     # ---- public ----
+    @_exclusive
     def run(self) -> dict:
         P.logger.info('[basic] Worker.run BEGIN items=%s use_waitfree=%s use_owned_rental=%s max_per_run=%s',
                       [i['raw'] + (' (소설)' if i['is_novel'] else '') for i in self.items],
@@ -806,6 +845,7 @@ class Worker:
                                      is_novel=is_novel)
 
     # ---- 전 작품 메타 일괄 동기화 (UI 버튼) ----
+    @_exclusive
     def sync_metadata_all(self) -> dict:
         """titles + titles_novel 의 모든 작품에 대해 info.xml/cover.jpg 누락분 생성.
 
@@ -915,6 +955,7 @@ class Worker:
         return {'ret': 'success', **summary}
 
     # ---- 회차 폴더 일괄 압축 (UI 버튼) ----
+    @_exclusive
     def compress_all(self) -> dict:
         """download_path 트리에서 '회차 폴더'를 찾아 ZIP 압축.
 
