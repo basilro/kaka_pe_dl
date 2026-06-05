@@ -138,70 +138,84 @@ def analyze(url_or_id: str) -> Dict[str, Any]:
     series_title = series_item.get('title') or f'series_{series_id}'
     is_novel = (series_item.get('category') or '') in ('웹소설', '소설')
 
+    # 이미 받은(completed) 회차 — 기본 체크 제외 + 체크 불가 표시용 (product_id 기준)
+    completed_pids = set()
+    try:
+        pids = [it['item'].get('product_id') for it in eps]
+        pids = [p for p in pids if p is not None]
+        if pids:
+            for r in (db.session.query(ModelKakaopageItem)
+                      .filter(ModelKakaopageItem.product_id.in_(pids)).all()):
+                if r.status == 'completed' and r.product_id is not None:
+                    completed_pids.add(r.product_id)
+    except Exception as e:
+        P.logger.warning('[manual] completed 조회 실패(계속): %s', e)
+
+    # 전체 회차를 표시용으로 모두 반환. selectable = 보유(무료/소장/대여) & 미수신.
     all_eps = []
     for x in eps:
         it = x['item']
+        pid = it.get('product_id')
         ep_no = KakaopageClient.episode_no_from_title(it.get('title', '')) or 0
         avail = KakaopageClient.episode_availability(it)
+        completed = pid in completed_pids
         all_eps.append({
-            'product_id': it.get('product_id'),
+            'product_id': pid,
             'episode_no': ep_no,
             'title': it.get('title', ''),
             'availability': avail,
-            'state': 'pending',  # pending | skipped | downloading | completed | failed
+            'completed': completed,
+            'selectable': (avail in ('free', 'owned', 'rented')) and not completed,
+            'state': 'pending',  # pending|skipped|downloading|completed|failed|excluded
             'pages_done': 0,
             'pages_total': 0,
             'save_dir': '',
             'error': '',
         })
-    # 다운로드 가능한 것만 (잠금/unknown 제외)
-    episodes = [e for e in all_eps if e['availability'] in ('free', 'owned', 'rented')]
-    # 회차순 정렬
-    episodes.sort(key=lambda e: (e['episode_no'], e['product_id'] or 0))
-    will_download = len(episodes)
+    all_eps.sort(key=lambda e: (e['episode_no'], e['product_id'] or 0))
+    will_download = sum(1 for e in all_eps if e['selectable'])
+
+    # 뷰어 URL(/viewer/{product_id})이면 그 회차만 자동 선택(focus). 무효면 폴백.
+    focus_pid = KakaopageClient.extract_product_id(url_or_id)
+    focus_note = ''
+    if focus_pid is not None:
+        match = next((e for e in all_eps if e['product_id'] == focus_pid), None)
+        if match is None:
+            focus_note = f'지정한 회차(pid {focus_pid}) 없음 — 받기 가능 전체 선택'
+            focus_pid = None
+        elif not match['selectable']:
+            focus_note = ('지정한 회차는 이미 받음 — 받기 가능 전체 선택'
+                          if match['completed']
+                          else '지정한 회차는 미구매/잠금 — 받을 수 없음')
+            focus_pid = None
 
     _reset_state()
     _set(status='idle',
-         message=f'분석 완료 — 전체 {len(all_eps)}개 중 다운로드 가능 {will_download}개',
+         message=(f'분석 완료 — 전체 {len(all_eps)}개, '
+                  f'받기 가능(보유·미수신) {will_download}개'),
          series_id=series_id, series_title=series_title,
-         episodes=episodes, total_to_download=will_download,
+         episodes=all_eps, total_to_download=0,
          _series_meta=series_item, _is_novel=is_novel)
 
-    P.logger.info('[manual] analyze END series=%r total=%d will_download=%d',
-                  series_title, len(all_eps), will_download)
+    P.logger.info('[manual] analyze END series=%r total=%d selectable=%d focus_pid=%s',
+                  series_title, len(all_eps), will_download, focus_pid)
     return {
         'ret': 'success',
         'series_id': series_id,
         'series_title': series_title,
-        'episodes': episodes,
+        'episodes': all_eps,
         'will_download': will_download,
         'total': len(all_eps),
+        'focus_pid': focus_pid,
+        'focus_note': focus_note,
     }
 
 
-# ---- run (분석 + 자동 시작 통합) ----
-def run_with_url(url_or_id: str) -> Dict[str, Any]:
-    """URL 하나로 분석 + 다운로드 시작까지."""
-    P.logger.info('[manual] run_with_url BEGIN url=%r', url_or_id)
-    if is_running():
-        return {'ret': 'fail', 'msg': '이미 실행 중'}
-    ar = analyze(url_or_id)
-    if ar.get('ret') != 'success':
-        return ar
-    sr = start()
-    return {
-        'ret': sr.get('ret', 'fail'),
-        'msg': sr.get('msg', ''),
-        'series_id': ar.get('series_id'),
-        'series_title': ar.get('series_title'),
-        'will_download': ar.get('will_download'),
-        'total': ar.get('total'),
-    }
-
-
-# ---- start (백그라운드) ----
-def start() -> Dict[str, Any]:
+# ---- start_selected (선택 회차만 백그라운드 다운로드) ----
+def start_selected(selected_pids: List[int]) -> Dict[str, Any]:
+    """analyze 로 만든 목록에서 선택된 보유 회차(product_id)만 다운로드."""
     global _thread
+    P.logger.info('[manual] start_selected BEGIN pids=%s', selected_pids)
     if is_running():
         return {'ret': 'fail', 'msg': '이미 실행 중'}
     with _state_lock:
@@ -211,17 +225,44 @@ def start() -> Dict[str, Any]:
     if not download_root:
         return {'ret': 'fail', 'msg': 'download_path 미설정 (설정 페이지에서 지정)'}
 
+    sel = set(int(p) for p in (selected_pids or []))
+    with _state_lock:
+        targets = [idx for idx, ep in enumerate(_state['episodes'])
+                   if ep.get('product_id') in sel and ep.get('selectable')]
+    if not targets:
+        return {'ret': 'fail',
+                'msg': '선택된 받기 가능 회차 없음 (보유·미수신만 선택 가능)'}
+
+    # 전역 락 — 자동/압축/메타 작업과 절대 겹치지 않게 (회차 폴더 zip+삭제와
+    # 다운로드가 겹쳐 폴더가 사라지는 ENOENT 사고 방지). _run 의 finally 에서 해제.
+    from . import worker as _wkr
+    if not _wkr.try_acquire_run_lock():
+        return {'ret': 'fail',
+                'msg': '자동 다운로드/압축 등 다른 작업이 실행 중 — 끝난 뒤 다시'}
+
+    target_set = set(targets)
+    with _state_lock:
+        for idx, ep in enumerate(_state['episodes']):
+            if idx in target_set:
+                ep['state'] = 'pending'; ep['error'] = ''
+                ep['pages_done'] = 0; ep['pages_total'] = 0
+            else:
+                ep['state'] = 'excluded'
+
     _cancel_flag.clear()
-    _set(status='running', message='다운로드 시작', started_at=datetime.now().isoformat(),
-         finished_at=None, current_index=-1, completed=0, skipped=0, failed=0)
-
-    _thread = threading.Thread(target=_run, args=(download_root,), daemon=True)
+    _set(status='running', message='선택 다운로드 시작',
+         started_at=datetime.now().isoformat(), finished_at=None,
+         current_index=-1, completed=0, skipped=0, failed=0,
+         total_to_download=len(targets))
+    _thread = threading.Thread(target=_run, args=(download_root, targets),
+                               daemon=True)
     _thread.start()
-    return {'ret': 'success', 'msg': '시작됨'}
+    return {'ret': 'success', 'msg': f'{len(targets)}개 회차 다운로드 시작'}
 
 
-def _run(download_root: str):
-    P.logger.info('[manual] _run BEGIN download_root=%r', download_root)
+def _run(download_root: str, target_indices: List[int]):
+    P.logger.info('[manual] _run BEGIN download_root=%r targets=%d',
+                  download_root, len(target_indices))
     # 백그라운드 thread 에서 db.session 쓰려면 Flask app context 필요
     with F.app.app_context():
         try:
@@ -249,7 +290,8 @@ def _run(download_root: str):
             except Exception as e:
                 P.logger.warning('[manual] ensure_title_metadata 실패: %s', e)
 
-            for idx, ep in enumerate(episodes):
+            total = len(target_indices)
+            for n, idx in enumerate(target_indices, start=1):
                 if _cancel_flag.is_set():
                     _set(status='canceled',
                          finished_at=datetime.now().isoformat(),
@@ -257,15 +299,15 @@ def _run(download_root: str):
                     P.logger.info('[manual] _run CANCELED at idx=%d', idx)
                     return
 
+                ep = episodes[idx]
                 _set(current_index=idx)
                 P.logger.info('[manual] _run [%d/%d] %s avail=%s pid=%s',
-                              idx + 1, len(episodes), ep.get('title'),
+                              n, total, ep.get('title'),
                               ep.get('availability'), ep.get('product_id'))
 
                 ok = _download_episode(cli, series_id, series_title,
                                        idx, ep, download_root)
-                P.logger.info('[manual] _run [%d/%d] result=%s',
-                              idx + 1, len(episodes), ok)
+                P.logger.info('[manual] _run [%d/%d] result=%s', n, total, ok)
                 with _state_lock:
                     if ok == 'completed':
                         _state['completed'] += 1
@@ -286,6 +328,9 @@ def _run(download_root: str):
             P.logger.error(traceback.format_exc())
             _set(status='error', finished_at=datetime.now().isoformat(),
                  message=f'에러: {e}')
+        finally:
+            from . import worker as _wkr
+            _wkr.release_run_lock()
 
 
 def _ep_update(idx: int, **kw):

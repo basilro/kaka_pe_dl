@@ -171,14 +171,17 @@ $('body').on('click', '.del-btn', function(e){
   e.preventDefault();
   var id = $(this).data('id');
   if (!confirm('이 회차 이력을 삭제하시겠습니까?\n다음 다운로드 시 다시 받게 됩니다.\n(폴더의 파일은 그대로 남고 새 다운로드가 덮어씁니다)')) return;
-  $.post('/' + package_name + '/ajax/basic/db_delete_item',
-         {db_id: id},
+  // 단건 삭제도 검증된 db_delete_items(복수) 핸들러를 재사용한다.
+  // 프레임워크 second_ajax 는 form['command'] 를 필수로 읽으므로
+  // command 없이 /ajax/basic/db_delete_item 로 보내면 400 (BadRequestKeyError).
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'db_delete_items', arg1: id},
          function(ret){
-    if (ret) {
+    if (ret && ret.ret === 'success') {
       $.notify('삭제됨 — 다음 다운 시 재다운로드', {className:'success'});
       globalRequestSearch('1');
     } else {
-      $.notify('삭제 실패', {className:'error'});
+      $.notify('삭제 실패: ' + ((ret && ret.msg) || '?'), {className:'error'});
     }
   }).fail(function(xhr){
     $.notify('서버 호출 실패: ' + xhr.status, {className:'error'});

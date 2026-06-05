@@ -426,6 +426,25 @@ class KakaopageClient:
         return None
 
     @staticmethod
+    def extract_product_id(url_or_id: str) -> Optional[int]:
+        """뷰어 URL 에서 product_id(개별 회차) 추출. 없으면 None.
+
+        - https://page.kakao.com/content/{series_id}/viewer/{product_id}
+        - ...?product_id=12345
+        (숫자만 있는 경우는 series_id 로 보므로 여기선 매칭 안 함)
+        """
+        s = (url_or_id or '').strip()
+        if not s:
+            return None
+        m = re.search(r'viewer/(\d+)', s)
+        if m:
+            return int(m.group(1))
+        m = re.search(r'[?&]product_id=(\d+)', s, re.I)
+        if m:
+            return int(m.group(1))
+        return None
+
+    @staticmethod
     def episode_availability(item: Dict) -> str:
         """회차 메타에서 보유/무료/잠금 추정.
 

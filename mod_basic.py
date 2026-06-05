@@ -84,7 +84,7 @@ class ModuleBasic(PluginModuleBase):
             elif command == 'compress_all':
                 ret = self.do_action_compress_all()
             # ---- 수동 다운로드 (명령 이름에서 manual_ 접두사 제거 — 라우터 충돌 회피) ----
-            elif command == 'mrun':
+            elif command == 'manalyze':
                 from . import manual_worker
                 url = (arg1 or '').strip()
                 if not url and req is not None:
@@ -93,8 +93,16 @@ class ModuleBasic(PluginModuleBase):
                                or req.args.get('url') or '').strip()
                     except Exception:
                         pass
-                P.logger.info('[mrun] url=%r arg1=%r', url, arg1)
-                ret = manual_worker.run_with_url(url)
+                P.logger.info('[manalyze] url=%r arg1=%r', url, arg1)
+                ret = manual_worker.analyze(url)
+            elif command == 'mdownload':
+                from . import manual_worker
+                pids = []
+                for x in (arg1 or '').split(','):
+                    x = x.strip()
+                    if x.isdigit():
+                        pids.append(int(x))
+                ret = manual_worker.start_selected(pids)
             elif command == 'mcancel':
                 from . import manual_worker
                 manual_worker.cancel()
