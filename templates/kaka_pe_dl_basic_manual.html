@@ -57,7 +57,7 @@ function availBadge(a){
 }
 function stateBadge(s){
   var m = {'pending':['light','대기'],'downloading':['info','다운중'],
-           'completed':['success','완료'],'skipped':['secondary','스킵'],
+           'completed':['success','완료'],'have':['primary','이미받음'],'skipped':['secondary','스킵'],
            'failed':['danger','실패'],'excluded':['light','제외']};
   var v = m[s] || ['light', s || '-'];
   return '<span class="badge badge-' + v[0] + '">' + v[1] + '</span>';
