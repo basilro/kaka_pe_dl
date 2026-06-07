@@ -45,6 +45,9 @@
 <script type="text/javascript">
 var package_name = "{{ arg['package_name'] }}";
 var pollTimer = null;
+// 분석 직후엔 체크박스를 활성으로 유지해야 하므로, 폴링(applyState)이 회차 목록을
+// 비활성으로 다시 그리지 않게 막는 플래그. 다운로드 시작 시 false 로 푼다.
+var interactiveMode = false;
 
 function availBadge(a){
   var m = {'free':['success','무료'],'owned':['primary','소장'],'rented':['info','대여'],
@@ -109,7 +112,10 @@ function applyState(st){
   bar.innerText = pct + '%';
   if (st.status === 'running') bar.classList.add('progress-bar-animated');
   else bar.classList.remove('progress-bar-animated');
-  renderEpisodes(st.episodes || [], st.current_index, false, null);
+  // 분석 모드(사용자가 체크 중)면 폴링이 목록을 덮어쓰지 않는다 — 상태/진행 텍스트만 갱신.
+  if (!interactiveMode) {
+    renderEpisodes(st.episodes || [], st.current_index, false, null);
+  }
 
   if (st.status === 'running' || st.status === 'analyzing') {
     if (!pollTimer) pollTimer = setInterval(pollProgress, 1500);
@@ -150,6 +156,9 @@ $('body').on('click', '#manualAnalyzeBtn', function(e){
       var msg = '전체 ' + data.total + '개 / 받기 가능(보유·미수신) ' + data.will_download + '개';
       if (data.focus_note) msg += ' — ' + data.focus_note;
       $('#m_message').text(msg);
+      // 새 분석 결과 — 분석 모드로 전환하고 직전 다운로드의 폴링을 멈춘다.
+      interactiveMode = true;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       renderEpisodes(data.episodes || [], -1, true, data.focus_pid || null);
       syncCheckAll();
     } else {
@@ -167,6 +176,7 @@ $('body').on('click', '#manualDownloadBtn', function(e){
   }).get();
   if (pids.length === 0) { $.notify('받을 회차를 선택하세요', {className: 'warn'}); return; }
   if (!confirm(pids.length + '개 회차를 다운로드할까요?')) return;
+  interactiveMode = false;  // 다운 시작 — 이제 폴링이 진행 상태를 그리게 한다.
   $.post('/' + package_name + '/ajax/basic/command',
          {command: 'mdownload', arg1: pids.join(',')},
          function(data){
