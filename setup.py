@@ -11,6 +11,7 @@ setting = {
             {'uri': 'basic/manual',  'name': '수동 다운로드'},
             {'uri': 'basic/status',  'name': '진행 상황'},
             {'uri': 'basic/list',    'name': '다운로드 이력'},
+            {'uri': 'basic/guide',   'name': '매뉴얼'},
             {'uri': 'log',           'name': '로그'},
         ],
     },

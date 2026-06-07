@@ -19,6 +19,17 @@ def _safe_filename(s: str) -> str:
     return s.strip().strip('.')
 
 
+def _webtoon_episode_dir(download_root: str, series_title: str,
+                         ep_no: int, episode_title: str) -> str:
+    """웹툰 회차 이미지 폴더. 압축 시 zip 은 이 경로 + '.zip'.
+
+    저장과 '이미 받았는지' 디스크 확인이 같은 규칙을 쓰도록 한 곳에 모은다.
+    (소설은 회차 폴더/zip 이 없으므로 웹툰 전용.)
+    """
+    return os.path.join(download_root, 'webtoon', _safe_filename(series_title),
+                        f'{ep_no:04d}_{_safe_filename(episode_title)}')
+
+
 _IMAGE_EXTS = ('.webp', '.jpg', '.jpeg', '.png', '.gif', '.bmp')
 
 
@@ -1027,6 +1038,40 @@ class Worker:
                 'skipped': skipped, 'failed': failed}
 
     # ---- one episode ----
+    def _recognize_existing_zip(self, series_title: str, series_id: int,
+                                ep_item: dict) -> bool:
+        """디스크에 웹툰 회차 zip 이 이미 있으면 재다운 없이 DB에 completed 로 인식.
+
+        압축(use_compress) 사용 시에만 동작 — zip 은 정상 완료된 웹툰 회차에만
+        생성되므로 zip 존재 = 완전한 다운로드 보장. DB에 레코드가 없을 때만 호출.
+        ticket 차감 전에 걸러 같은 회차 헛다운/티켓 재차감을 막는다(소설은 대상 아님).
+
+        반환: 인식 처리했으면 True(호출측은 스킵), zip 없거나 압축 off 면 False.
+        """
+        if not self.use_compress:
+            return False
+        ep_no = KakaopageClient.episode_no_from_title(ep_item.get('title', '')) or 0
+        episode_title = ep_item.get('title', '')
+        zip_path = _webtoon_episode_dir(self.download_root, series_title,
+                                        ep_no, episode_title) + '.zip'
+        if not os.path.exists(zip_path):
+            return False
+        rec = ModelKakaopageItem()
+        rec.series_id = series_id
+        rec.series_title = series_title
+        rec.product_id = ep_item.get('product_id')
+        rec.episode_no = ep_no
+        rec.episode_title = episode_title
+        rec.status = 'completed'
+        rec.save_dir = zip_path
+        rec.downloaded_at = datetime.now()
+        rec.updated_time = rec.downloaded_at
+        db.session.add(rec)
+        db.session.commit()
+        P.logger.info('[%s] %s 디스크 zip 존재 — 재다운 생략, DB 인식 (%s)',
+                      series_title, episode_title, zip_path)
+        return True
+
     def _download_one(self, series_title: str, series_id: int, ep_item: dict,
                       availability: str = 'locked', wf_charged: Optional[bool] = None,
                       is_novel: bool = False) -> str:
@@ -1046,6 +1091,9 @@ class Worker:
         rec = db.session.query(ModelKakaopageItem).filter_by(product_id=product_id).first()
         if rec and rec.status == 'completed':
             P.logger.info('[%s] %s 이미 다운로드 완료 — 스킵', series_title, episode_title)
+            return 'skipped'
+        # DB엔 없지만 디스크에 이미 받은 zip 이 있으면 인식만 하고 스킵 (헛다운/티켓 방지)
+        if rec is None and self._recognize_existing_zip(series_title, series_id, ep_item):
             return 'skipped'
         if rec is None:
             rec = ModelKakaopageItem()
@@ -1203,8 +1251,8 @@ class Worker:
             failed = []
         # === 웹툰 (이미지) — 회차폴더 안에 페이지별 이미지 ===
         else:
-            e_folder = f'{ep_no:04d}_{_safe_filename(episode_title)}'
-            save_dir = os.path.join(series_dir, e_folder)
+            save_dir = _webtoon_episode_dir(self.download_root, series_title,
+                                            ep_no, episode_title)
             os.makedirs(save_dir, exist_ok=True)
             rec.save_dir = save_dir
             rec.status = 'downloading'
