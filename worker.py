@@ -438,8 +438,11 @@ class Worker:
 
     @staticmethod
     def _split_items(raw: str) -> List[str]:
+        # 구분자: 개행 + 세로줄 계열(ASCII | / 전각 ｜ / │ / ¦). 전각 ｜ 로 붙여넣는
+        # 경우가 많아 ASCII | 만 분리하면 한 덩어리로 뭉쳐 대부분 누락된다.
         out = []
-        for chunk in (raw or '').replace('\r', '').replace('|', '\n').split('\n'):
+        norm = re.sub(r'[|｜│¦]', '\n', (raw or '').replace('\r', ''))
+        for chunk in norm.split('\n'):
             s = chunk.strip()
             if s:
                 out.append(s)

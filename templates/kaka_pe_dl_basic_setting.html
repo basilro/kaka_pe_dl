@@ -239,7 +239,7 @@ function _parseTokens(raw){
   if (!raw) return out;
   var parts = raw.replace(/\r/g, '\n').split('\n');
   for (var i = 0; i < parts.length; i++){
-    var sub = parts[i].split('|');
+    var sub = parts[i].split(/[|｜│¦]/);  // ASCII | + 전각 ｜ / │ / ¦ 모두 구분자
     for (var j = 0; j < sub.length; j++){
       var t = sub[j].trim();
       if (t) out.push(t);
