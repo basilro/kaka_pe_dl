@@ -4,7 +4,7 @@ import os
 import re
 import threading
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from urllib.parse import unquote as urlparse_unquote
 
 from .client import KakaopageClient, KakaopageError, AuthRequiredError, NotPurchasedError
@@ -208,6 +208,37 @@ def title_dir_for(download_root: str, title_name: str,
     """kakaopage 다운로드 폴더 규칙: {download_root}/{webtoon|novel}/{title}/"""
     kind = 'novel' if is_novel else 'webtoon'
     return os.path.join(download_root, kind, _safe_filename(title_name))
+
+
+def discover_title_folders(download_root: str,
+                           logger=None) -> List[Tuple[bool, str]]:
+    """download_root/{webtoon|novel}/{작품}/ 구조에서 작품 폴더를 수집.
+
+    반환: [(is_novel, folder_name), ...] (webtoon 먼저, 각 폴더명 정렬).
+    메타 동기화가 watchlist(설정 titles/titles_novel) 비어 있어도 디스크에
+    이미 받아둔 작품을 대상으로 삼도록 하는 헬퍼.
+    """
+    found: List[Tuple[bool, str]] = []
+    seen = set()
+    root = (download_root or '').strip()
+    if not root or not os.path.isdir(root):
+        return found
+    for kind, is_novel in (('webtoon', False), ('novel', True)):
+        kdir = os.path.join(root, kind)
+        if not os.path.isdir(kdir):
+            continue
+        try:
+            for name in sorted(os.listdir(kdir)):
+                if not os.path.isdir(os.path.join(kdir, name)):
+                    continue
+                key = (is_novel, name)
+                if name and key not in seen:
+                    seen.add(key)
+                    found.append((is_novel, name))
+        except OSError as e:
+            if logger:
+                logger.warning('[basic] %s 폴더 스캔 실패: %s', kind, e)
+    return found
 
 
 def build_info_xml(title_name: str, series_meta: Dict[str, Any],
@@ -922,15 +953,47 @@ class Worker:
 
     # ---- 전 작품 메타 일괄 동기화 (UI 버튼) ----
     @_exclusive
-    def sync_metadata_all(self) -> dict:
-        """titles + titles_novel 의 모든 작품에 대해 info.xml/cover.jpg 누락분 생성.
+    def _resolve_series_meta(self, raw, is_novel, search_key):
+        """raw(URL/ID 또는 제목) → (series_id, 표시제목, series_meta).
 
-        다운로드 폴더에 작품 폴더가 이미 있는 항목만 처리 — 없으면 만들지 않고 스킵.
+        URL/ID 면 series_id 직접 추출, 아니면 search_key 로 검색해 매칭.
+        실패 시 (None, None, None).
         """
-        P.logger.info('[basic] sync_metadata_all BEGIN items=%d', len(self.items))
+        sid = KakaopageClient.extract_series_id(raw)
+        title_guess = None
+        if sid is None:
+            category = (KakaopageClient.NOVEL_CATEGORIES
+                        if is_novel else KakaopageClient.COMIC_CATEGORIES)
+            series = self.client.find_series(search_key, category=category)
+            if not series:
+                return None, None, None
+            sid = series['series_id']
+            title_guess = series.get('title') or search_key
+        if sid is None:
+            return None, None, None
+        meta = self.client.get_series_item(sid) or {}
+        title = (meta.get('title') or title_guess or search_key or '').strip()
+        return sid, title, meta
+
+    def sync_metadata_all(self) -> dict:
+        """다운로드 폴더를 스캔해 모든 작품의 info.xml/cover.jpg 누락분 생성.
+
+        대상 = 설정 watchlist(titles/titles_novel) + download_path 를 스캔해
+        찾은 작품 폴더({webtoon|novel}/작품). watchlist 가 비어 있어도 이미
+        받아둔 작품이 있으면 메타를 채운다. 둘 다 있으면 네트워크 호출 없이 스킵.
+        """
+        disk = discover_title_folders(self.download_root, logger=P.logger)
+        watchlist = list(self.items)
+        # watchlist 토큰과 폴더명이 같으면 디스크 목록에서 제외 (중복 처리 방지)
+        wl_set = {(it['is_novel'], it['raw']) for it in watchlist}
+        disk = [(nv, f) for (nv, f) in disk if (nv, f) not in wl_set]
+        total = len(watchlist) + len(disk)
+
+        P.logger.info('[basic] sync_metadata_all BEGIN watchlist=%d disk=%d '
+                      'total=%d', len(watchlist), len(disk), total)
         _auto_reset()
         _auto_set(status='running', started_at=datetime.now().isoformat(),
-                  message='메타 동기화 시작', titles_total=len(self.items))
+                  message='메타 동기화 시작', titles_total=total)
         if not self.download_root:
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='download_path 미설정')
@@ -939,9 +1002,9 @@ class Worker:
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
                       message='cookies_json 미설정')
             return {'ret': 'fail', 'reason': 'no_cookies'}
-        if not self.items:
+        if not total:
             _auto_set(status='error', finished_at=datetime.now().isoformat(),
-                      message='체크할 작품 미설정')
+                      message='동기화할 작품 없음 (watchlist 비어있고 다운로드 폴더에도 작품 폴더 없음)')
             return {'ret': 'fail', 'reason': 'no_titles'}
 
         try:
@@ -952,9 +1015,12 @@ class Worker:
                       message=f'쿠키 인증 실패: {e}')
             return {'ret': 'fail', 'reason': 'auth', 'msg': str(e)}
 
-        summary = {'titles': len(self.items), 'info': 0, 'cover': 0,
+        summary = {'titles': total, 'info': 0, 'cover': 0,
                    'skipped_no_folder': 0, 'failed': 0}
-        for item in self.items:
+        done = 0
+
+        # 1) 설정 watchlist — 해석된 제목으로 폴더 점검
+        for item in watchlist:
             raw = item['raw']
             is_novel = item['is_novel']
             kind_label = '소설' if is_novel else '웹툰'
@@ -963,64 +1029,71 @@ class Worker:
                       current_episode='', current_pages_done=0,
                       current_pages_total=0)
             try:
-                sid = KakaopageClient.extract_series_id(raw)
+                sid, title, series_meta = self._resolve_series_meta(
+                    raw, is_novel, raw)
                 if sid is None:
-                    category = (KakaopageClient.NOVEL_CATEGORIES
-                                if is_novel else KakaopageClient.COMIC_CATEGORIES)
-                    series = self.client.find_series(raw, category=category)
-                    if not series:
-                        summary['failed'] += 1
-                        continue
-                    sid = series['series_id']
-                    title_guess = series.get('title') or raw
+                    P.logger.warning('[sync_metadata] 제목 매칭 실패: %r', raw)
+                    summary['failed'] += 1
                 else:
-                    title_guess = raw
-
-                # 폴더 존재 여부 먼저 확인 — 없으면 메타 API 호출 없이 스킵
-                folder = title_dir_for(self.download_root, title_guess, is_novel)
-                series_meta = {}
-                if not os.path.isdir(folder):
-                    # 검색 결과 title로도 한 번 더 점검 (입력이 ID인 경우)
-                    series_meta = self.client.get_series_item(sid)
-                    new_title = (series_meta.get('title') or '').strip()
-                    if new_title:
-                        alt_folder = title_dir_for(self.download_root,
-                                                   new_title, is_novel)
-                        if os.path.isdir(alt_folder):
-                            folder = alt_folder
-                            title_guess = new_title
-                        else:
-                            summary['skipped_no_folder'] += 1
-                            continue
-                    else:
+                    folder = title_dir_for(self.download_root, title, is_novel)
+                    if not os.path.isdir(folder):
                         summary['skipped_no_folder'] += 1
-                        continue
-
-                _auto_set(current_title=f'[{kind_label}] {title_guess}')
-
-                # 둘 다 이미 있으면 API 호출 안 함
-                info_p = os.path.join(folder, 'info.xml')
-                cover_p = os.path.join(folder, 'cover.jpg')
-                if os.path.isfile(info_p) and os.path.isfile(cover_p):
-                    continue
-
-                if not series_meta:
-                    series_meta = self.client.get_series_item(sid) or {}
-
-                r = self._ensure_title_metadata(title_guess, sid, series_meta,
-                                                is_novel=is_novel)
-                if r.get('info'):
-                    summary['info'] += 1
-                if r.get('cover'):
-                    summary['cover'] += 1
+                    else:
+                        _auto_set(current_title=f'[{kind_label}] {title}')
+                        info_p = os.path.join(folder, 'info.xml')
+                        cover_p = os.path.join(folder, 'cover.jpg')
+                        if os.path.isfile(info_p) and os.path.isfile(cover_p):
+                            pass  # 완비 — 스킵
+                        else:
+                            r = self._ensure_title_metadata(
+                                title, sid, series_meta, is_novel=is_novel)
+                            if r.get('info'):
+                                summary['info'] += 1
+                            if r.get('cover'):
+                                summary['cover'] += 1
             except Exception as e:
                 import traceback
                 P.logger.error('[sync_metadata] %r 예외: %s', raw, e)
                 P.logger.error(traceback.format_exc())
                 summary['failed'] += 1
-            _auto_set(titles_done=(summary['info'] + summary['cover']
-                                   + summary['skipped_no_folder']
-                                   + summary['failed']))
+            done += 1
+            _auto_set(titles_done=done)
+
+        # 2) 디스크에서 찾은 작품 폴더 — 발견한 실제 폴더에 그대로 기록
+        for is_novel, folder_name in disk:
+            kind_label = '소설' if is_novel else '웹툰'
+            _auto_set(current_title=f'[{kind_label}] {folder_name}',
+                      current_phase='sync_metadata',
+                      current_episode='', current_pages_done=0,
+                      current_pages_total=0)
+            try:
+                folder = title_dir_for(self.download_root, folder_name, is_novel)
+                info_p = os.path.join(folder, 'info.xml')
+                cover_p = os.path.join(folder, 'cover.jpg')
+                if os.path.isfile(info_p) and os.path.isfile(cover_p):
+                    pass  # 이미 완비 — 네트워크 호출 없이 스킵
+                else:
+                    sid, title, series_meta = self._resolve_series_meta(
+                        folder_name, is_novel, folder_name)
+                    if sid is None:
+                        P.logger.warning('[sync_metadata] 제목 매칭 실패: %r',
+                                         folder_name)
+                        summary['failed'] += 1
+                    else:
+                        _auto_set(current_title=f'[{kind_label}] {title}')
+                        r = self._ensure_title_metadata(
+                            folder_name, sid, series_meta, is_novel=is_novel)
+                        if r.get('info'):
+                            summary['info'] += 1
+                        if r.get('cover'):
+                            summary['cover'] += 1
+            except Exception as e:
+                import traceback
+                P.logger.error('[sync_metadata] %r 예외: %s', folder_name, e)
+                P.logger.error(traceback.format_exc())
+                summary['failed'] += 1
+            done += 1
+            _auto_set(titles_done=done)
 
         _auto_set(status='done', finished_at=datetime.now().isoformat(),
                   current_title='', current_phase='', current_episode='',
@@ -1028,6 +1101,7 @@ class Worker:
                            f"cover {summary['cover']}, "
                            f"폴더없음 {summary['skipped_no_folder']}, "
                            f"실패 {summary['failed']}"))
+        P.logger.info('[basic] sync_metadata_all END %s', summary)
         return {'ret': 'success', **summary}
 
     # ---- 회차 폴더 일괄 압축 (UI 버튼) ----
