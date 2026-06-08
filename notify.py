@@ -92,3 +92,17 @@ def build_cookie_expired_message() -> str:
     return ('[카카오페이지] 쿠키 만료 감지\n'
             '설정 페이지에서 쿠키를 재주입해주세요.\n'
             '(자동 다운로드가 중단됩니다)')
+
+
+def build_completed_removed_message(removed_titles: List[str]) -> str:
+    """완결+전회차완료 감지로 체크 목록에서 자동 제거된 작품 목록.
+
+    removed_titles: ['웹툰: 작품A', '소설: 작품B'] 처럼 종류 라벨이 prefix 된 제목 list.
+    """
+    if not removed_titles:
+        return ''
+    total = len(removed_titles)
+    lines = [f'[카카오페이지] 완결+전회차 완료 — 체크 목록에서 자동 제거 {total}개']
+    for t in removed_titles:
+        lines.append(f'- {t}')
+    return '\n'.join(lines)

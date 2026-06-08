@@ -10,7 +10,8 @@ from urllib.parse import unquote as urlparse_unquote
 from .client import KakaopageClient, KakaopageError, AuthRequiredError, NotPurchasedError
 from .model import ModelKakaopageItem
 from .notify import (send_webhook, build_download_summary,
-                     build_cookie_expired_message)
+                     build_cookie_expired_message,
+                     build_completed_removed_message)
 from .setup import *  # P, db, logger
 
 
@@ -566,6 +567,7 @@ class Worker:
         self.notify_cookie_url = (self.cfg.get('notify_webhook_cookie') or '').strip()
         self.notify_download_url = (self.cfg.get('notify_webhook_download') or '').strip()
         self.notify_download_novel_url = (self.cfg.get('notify_webhook_download_novel') or '').strip()
+        self.notify_completed_url = (self.cfg.get('notify_webhook_completed') or '').strip()
         self.proxy_url = KakaopageClient.resolve_proxy(
             self.cfg.get('use_proxy'), self.cfg.get('proxy_url'))
         self.use_compress = (self.cfg.get('use_compress') or 'False') == 'True'
@@ -702,7 +704,7 @@ class Worker:
             except Exception as e:
                 P.logger.warning('소설 다운로드 요약 알림 예외: %s', e)
 
-        # ---- 완결+전회차완료 작품: settings에서 자동 제거 ----
+        # ---- 완결+전회차완료 작품: settings에서 자동 제거 + 알림 ----
         removed_msg = ''
         if self.to_remove:
             try:
@@ -711,6 +713,14 @@ class Worker:
                     removed_msg = f", 완결제거 {len(removed_titles)}"
                     P.logger.info('[basic] 완결 자동 제거 완료: %s',
                                   ', '.join(removed_titles))
+                    if self.notify_completed_url:
+                        try:
+                            msg = build_completed_removed_message(removed_titles)
+                            ok = send_webhook(self.notify_completed_url, msg)
+                            P.logger.info('완결 자동 제거 알림 발송: %s (%d건)',
+                                          'OK' if ok else 'FAIL', len(removed_titles))
+                        except Exception as e:
+                            P.logger.warning('완결 자동 제거 알림 예외: %s', e)
             except Exception as e:
                 P.logger.warning('[basic] 완결 자동 제거 적용 실패: %s', e)
 
@@ -771,10 +781,11 @@ class Worker:
                 P.logger.warning('[basic] %s 에서 제거 대상 토큰 미발견 — 사용자가 이미 편집했을 수 있음', key)
                 continue
             new_value = '\n'.join(lines_out)
+            kind_label = '소설' if key == 'titles_novel' else '웹툰'
             try:
                 P.ModelSetting.set(key, new_value)
                 for r in matched:
-                    removed_titles.append(raw_to_title[r])
+                    removed_titles.append(f'{kind_label}: {raw_to_title[r]}')
             except Exception as e:
                 P.logger.warning('[basic] %s 저장 실패: %s', key, e)
         return removed_titles

@@ -31,6 +31,7 @@ class ModuleBasic(PluginModuleBase):
             'notify_webhook_cookie': '',          # 쿠키 만료 시 발송할 웹훅
             'notify_webhook_download': '',        # 웹툰 다운로드 완료 요약 발송 웹훅
             'notify_webhook_download_novel': '',  # 소설 다운로드 완료 요약 발송 웹훅
+            'notify_webhook_completed': '',       # 완결+전회차완료 자동 제거 알림 웹훅
             'cookie_expired_notified': 'False',   # 쿠키 만료 알림 1회 발송 플래그
             'use_proxy': 'False',                 # 프록시 사용 여부
             'proxy_url': '',                      # warproxy 등. use_proxy=True + 값 있을 때만 사용
@@ -121,7 +122,7 @@ class ModuleBasic(PluginModuleBase):
                     'manual': manual_worker.get_state(),
                 }
             elif command == 'notify_test':
-                # arg1 = 'cookie' | 'download' | 'download_novel'
+                # arg1 = 'cookie' | 'download' | 'download_novel' | 'completed'
                 from .notify import send_webhook
                 kind = (arg1 or 'cookie').strip().lower()
                 if kind == 'download_novel':
@@ -130,6 +131,9 @@ class ModuleBasic(PluginModuleBase):
                 elif kind == 'download':
                     url_key = 'notify_webhook_download'
                     label = '웹툰 다운로드'
+                elif kind == 'completed':
+                    url_key = 'notify_webhook_completed'
+                    label = '완결 자동 제거'
                 else:
                     kind = 'cookie'
                     url_key = 'notify_webhook_cookie'
