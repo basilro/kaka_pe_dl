@@ -454,12 +454,18 @@ class KakaopageClient:
     def episode_availability(item: Dict) -> str:
         """회차 메타에서 보유/무료/잠금 추정.
 
-        returns: 'owned' | 'rented' | 'free' | 'locked' | 'unknown'
+        returns: 'owned' | 'rented' | 'free' | 'locked'
 
-        주의: 'not_purchased' + is_free=True 동시인 케이스는 무료로 우선 판정.
-        rent 의 경우 rent_expire_dt 가 과거면 'locked'.
+        규칙:
+          - is_free=True → free (우선)
+          - service_property.purchase_info.purchase_type == 'own' → owned
+          - 동 'rent'/'rental' → rented (만료시 locked)
+          - 그 외 (not_purchased / 빈문자 / 누락) → locked
+            ※ 카카오 BFF 가 비인증 또는 응답 변경으로 service_property 를
+              빈 dict 로 주는 경우가 있어, 'unknown' 으로 빠뜨리면 잠금 회차
+              자체가 분류에서 누락되어 ticket/my 조회·기다무 사용이
+              일어나지 않는다. is_free=False 면 보수적으로 잠금 처리.
         """
-        # 무료 회차 우선 판정 (purchase_type=not_purchased 와 공존 가능)
         if item.get('is_free') is True:
             return 'free'
 
@@ -482,9 +488,7 @@ class KakaopageClient:
                     pass
             return 'rented'
 
-        if pt == 'not_purchased':
-            return 'locked'
-        return 'unknown'
+        return 'locked'
 
     @staticmethod
     def episode_no_from_title(title: str) -> Optional[int]:
