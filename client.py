@@ -232,8 +232,13 @@ class KakaopageClient:
     NOVEL_CATEGORIES = ('웹소설', '소설')
     COMIC_CATEGORIES = ('웹툰', '만화')
 
+    @staticmethod
+    def _norm_title(s: str) -> str:
+        """제목 비교용 정규화 — 공백 제거 + 소문자. ("신의탑" == "신의 탑")"""
+        return re.sub(r'\s+', '', (s or '')).lower()
+
     def find_series(self, title: str, category='웹툰') -> Optional[Dict]:
-        """검색 결과 중 정확히 일치하는 작품 1개 선택.
+        """검색 결과 중 제목이 (공백/대소문자 무시) 일치하는 작품 1개 선택.
 
         category: 문자열(legacy), 빈 문자열(any), 또는 tuple/list(여러 허용값).
                   빈/None 이면 카테고리 필터 안 함 (어떤 카테고리든 허용).
@@ -241,6 +246,7 @@ class KakaopageClient:
                   '같은 제목, 다른 종류' 오매칭 방지.
         """
         items = self.search_series(title)
+        key = self._norm_title(title)
         if not category:
             wanted = set()
             forbidden = set()
@@ -257,14 +263,14 @@ class KakaopageClient:
                 forbidden = set()
         # 1차: title + 원하는 category 일치
         for it in items:
-            if it.get('title') != title:
+            if self._norm_title(it.get('title')) != key:
                 continue
             cat = it.get('category') or ''
             if wanted and cat in wanted:
                 return it
         # 2차: title 일치 + 반대 종류 카테고리는 제외 (카테고리 미상/기타는 허용)
         for it in items:
-            if it.get('title') != title:
+            if self._norm_title(it.get('title')) != key:
                 continue
             cat = it.get('category') or ''
             if forbidden and cat in forbidden:
