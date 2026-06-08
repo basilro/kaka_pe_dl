@@ -953,6 +953,14 @@ class Worker:
                     break
 
                 downloaded_count += 1
+                # owned 강등(이미 보유) 회차는 ticket 차감 없이 다운된 거라
+                # ticket_my 잔량 변화도 없음. 추적 fallback 이 가짜 카운트하지
+                # 않도록 ticket_my 재조회·카운트를 통째로 건너뛰고 다음 회차로.
+                if not getattr(self, '_last_ticket_consumed', False):
+                    P.logger.info('[%s] 이미 보유 회차 다운 — ticket 카운트 제외, '
+                                  '잔량 그대로 (wf=%s own=%s)',
+                                  title, wf_ready, own_left)
+                    continue
                 # ticket 상태 갱신 + 어느 쪽 ticket이 줄었는지 추적
                 _auto_set(current_phase='check_ticket')
                 tm2 = self.client.get_ticket_my(series_id)
@@ -1428,6 +1436,10 @@ class Worker:
 
         # 알림 분류용 — locked 분기에서 ticket_used_type 보고 갱신
         kind = 'free'  # 'free' | 'waitfree' | 'ticket'
+        # 외부 루프가 ticket 차감 추적을 정확히 하기 위한 마커.
+        # owned 강등 케이스(이미 보유한 회차)에선 ticket_my 잔량이 변화하지 않으므로
+        # 추적 fallback 이 잘못 카운트하지 않도록 사용.
+        self._last_ticket_consumed = False
 
         # ---- ticket 단계 (잠금 회차만) ----
         if availability == 'locked':
@@ -1449,66 +1461,84 @@ class Worker:
                 P.logger.info('[%s] %s ready_to_use available=%s',
                               series_title, episode_title, available)
 
-            # ticket_type 우선순위 결정 (use_waitfree / use_owned_rental 옵션 기반)
-            tries: List[str] = []
-            # 1. 기다무 사용 가능 + 충전됨 → RT05 우선
-            if self.use_waitfree and wf_charged is not False:
-                tries.append('RT05')
-            # 2. 일반 대여권 사용 가능 → 카카오 추천 type
-            if self.use_owned_rental and rec_type and rec_type not in tries:
-                tries.append(rec_type)
-            # 3. 보완: use_waitfree=True 인데 wf 미충전 등으로 위에서 RT05 빠진 경우
-            #    fallback으로라도 한 번 시도 (use_owned_rental이 다 실패했을 때 마지막 보루)
-            if self.use_waitfree and 'RT05' not in tries:
-                tries.append('RT05')
-            if not tries:
-                # 두 옵션 모두 Off — 호출자가 미리 걸러야 함 (방어적)
-                P.logger.info('[%s] %s 대여권 사용 옵션 모두 Off — 스킵',
-                              series_title, episode_title)
-                rec.status = 'skipped_no_ticket'; db.session.commit()
-                return 'skipped'
-            P.logger.info('[%s] %s ticket 시도 순서: %s (use_wf=%s, use_own=%s, wf_charged=%s)',
-                          series_title, episode_title, tries,
-                          self.use_waitfree, self.use_owned_rental, wf_charged)
+            # 카카오 측에서 이미 보유한 회차(다른 환경에서 봤거나 BFF 응답의
+            # service_property 가 비어와서 v1.0.34 가 보수적으로 locked 로 분류한
+            # 경우). ticket 차감 건너뛰고 바로 viewer_data 다운로드.
+            already_owned = (ready.get('single') or {}).get('is_done') is True
+            if already_owned:
+                P.logger.info('[%s] %s 카카오 측 이미 보유 (single.is_done=true) — '
+                              'ticket 건너뛰고 다운', series_title, episode_title)
+            else:
+                # ticket_type 우선순위 결정 (use_waitfree / use_owned_rental 옵션 기반)
+                tries: List[str] = []
+                # 1. 기다무 사용 가능 + 충전됨 → RT05 우선
+                if self.use_waitfree and wf_charged is not False:
+                    tries.append('RT05')
+                # 2. 일반 대여권 사용 가능 → 카카오 추천 type
+                if self.use_owned_rental and rec_type and rec_type not in tries:
+                    tries.append(rec_type)
+                # 3. 보완: use_waitfree=True 인데 wf 미충전 등으로 위에서 RT05 빠진 경우
+                #    fallback으로라도 한 번 시도 (use_owned_rental이 다 실패했을 때 마지막 보루)
+                if self.use_waitfree and 'RT05' not in tries:
+                    tries.append('RT05')
+                if not tries:
+                    # 두 옵션 모두 Off — 호출자가 미리 걸러야 함 (방어적)
+                    P.logger.info('[%s] %s 대여권 사용 옵션 모두 Off — 스킵',
+                                  series_title, episode_title)
+                    rec.status = 'skipped_no_ticket'; db.session.commit()
+                    return 'skipped'
+                P.logger.info('[%s] %s ticket 시도 순서: %s (use_wf=%s, use_own=%s, wf_charged=%s)',
+                              series_title, episode_title, tries,
+                              self.use_waitfree, self.use_owned_rental, wf_charged)
 
-            used = None
-            last_err = None
-            tried_types = []
-            for tt in tries:
-                tried_types.append(tt)
-                try:
-                    used = self.client.use_ticket(product_id, ticket_type=tt)
-                    P.logger.info('[%s] %s use_ticket(%s) 성공',
-                                  series_title, episode_title, tt)
-                    break
-                except KakaopageError as e:
-                    last_err = e
-                    P.logger.info('[%s] %s use_ticket(%s) 실패: %s',
-                                  series_title, episode_title, tt, e)
+                used = None
+                last_err = None
+                tried_types = []
+                for tt in tries:
+                    tried_types.append(tt)
+                    try:
+                        used = self.client.use_ticket(product_id, ticket_type=tt)
+                        P.logger.info('[%s] %s use_ticket(%s) 성공',
+                                      series_title, episode_title, tt)
+                        break
+                    except KakaopageError as e:
+                        last_err = e
+                        msg = str(e)
+                        # -351 이미 구입한 항목: ticket 차감 없이 다운 가능.
+                        if '이미 구입' in msg:
+                            P.logger.info('[%s] %s use_ticket(%s) → 이미 구입(-351) — '
+                                          'ticket 건너뛰고 다운',
+                                          series_title, episode_title, tt)
+                            already_owned = True
+                            break
+                        P.logger.info('[%s] %s use_ticket(%s) 실패: %s',
+                                      series_title, episode_title, tt, e)
 
-            if used is None:
-                # 사용 가능 ticket 없음 — 스킵 (use_waitfree_only면 의도대로 기다무 미충전)
-                rec.status = 'skipped_no_ticket'
-                rec.error_msg = f'use_ticket {tried_types} 모두 실패: {last_err}'
-                db.session.commit()
-                P.logger.info('[%s] %s ticket 사용 불가 — 스킵 (tried=%s)',
-                              series_title, episode_title, tried_types)
-                return 'skipped'
+                if not already_owned:
+                    if used is None:
+                        # 사용 가능 ticket 없음 — 스킵 (use_waitfree_only면 의도대로 기다무 미충전)
+                        rec.status = 'skipped_no_ticket'
+                        rec.error_msg = f'use_ticket {tried_types} 모두 실패: {last_err}'
+                        db.session.commit()
+                        P.logger.info('[%s] %s ticket 사용 불가 — 스킵 (tried=%s)',
+                                      series_title, episode_title, tried_types)
+                        return 'skipped'
 
-            # 마지막으로 성공한 type (tries 순서 그대로 시도하므로 break 시점의 마지막 element)
-            ticket_used_type = tried_types[-1]
-            # 알림 분류: RT05=기다무, 그 외(RT01 등)=일반 대여권
-            kind = 'waitfree' if ticket_used_type == 'RT05' else 'ticket'
-            rec.ticket_uid = used.get('ticket_uid')
-            rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
-            db.session.commit()
-            P.logger.info('[%s] %s ticket 차감 OK (type=%s uid=%s expire=%s)',
-                          series_title, episode_title, ticket_used_type,
-                          rec.ticket_uid, rec.rent_expire_dt)
-            try:
-                self.client.open_page(series_id, product_id, rec.ticket_uid or '')
-            except KakaopageError as e:
-                P.logger.warning('open_page 실패 (계속): %s', e)
+                    # 마지막으로 성공한 type (tries 순서 그대로 시도하므로 break 시점의 마지막 element)
+                    ticket_used_type = tried_types[-1]
+                    # 알림 분류: RT05=기다무, 그 외(RT01 등)=일반 대여권
+                    kind = 'waitfree' if ticket_used_type == 'RT05' else 'ticket'
+                    rec.ticket_uid = used.get('ticket_uid')
+                    rec.rent_expire_dt = _parse_dt(used.get('rent_expire_dt'))
+                    db.session.commit()
+                    self._last_ticket_consumed = True
+                    P.logger.info('[%s] %s ticket 차감 OK (type=%s uid=%s expire=%s)',
+                                  series_title, episode_title, ticket_used_type,
+                                  rec.ticket_uid, rec.rent_expire_dt)
+                    try:
+                        self.client.open_page(series_id, product_id, rec.ticket_uid or '')
+                    except KakaopageError as e:
+                        P.logger.warning('open_page 실패 (계속): %s', e)
         else:
             P.logger.info('[%s] %s 직접 다운 (availability=%s)',
                           series_title, episode_title, availability)
