@@ -9,9 +9,13 @@
           <select id="option" name="option" class="form-control form-control-sm">
             <option value="all">전체</option>
             <option value="completed">완료</option>
-            <option value="failed">실패</option>
             <option value="partial">부분</option>
+            <option value="failed">실패</option>
             <option value="pending">대기</option>
+            <option value="using_ticket">이용권 차감 중</option>
+            <option value="downloading">다운로드 중</option>
+            <option value="skipped_no_ticket">스킵(이용권 부족)</option>
+            <option value="skipped_unsupported">스킵(미지원/트레일러)</option>
           </select>
         </span>
         <span class="col-md-2">
@@ -69,6 +73,7 @@ function statusBadge(s){
   else if(s === 'partial') cls = 'warning';
   else if(s === 'failed') cls = 'danger';
   else if(s === 'downloading' || s === 'using_ticket') cls = 'info';
+  else if(s === 'skipped_no_ticket' || s === 'skipped_unsupported') cls = 'dark';
   return '<span class="badge badge-' + cls + '">' + (s || '-') + '</span>';
 }
 
