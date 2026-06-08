@@ -140,6 +140,13 @@
             desc=['자동 실행이 끝나고 소설을 받은 게 있을 때 요약 메시지 발송.',
                   '받은 회차가 없으면 알림 안 보냄.',
                   '비우면 알림 OFF.']) }}
+
+        {{ macros.setting_input_text_and_buttons('notify_webhook_completed', '완결 자동 제거 알림 URL',
+            [['notifyTestCompletedBtn', '테스트']],
+            value=arg['notify_webhook_completed'],
+            desc=['완결 + 전회차 완료로 감지되어 체크 목록에서 자동 제거된 작품을 알려줍니다.',
+                  '제거된 작품 제목과 종류(웹툰/소설)가 포함됩니다.',
+                  '비우면 알림 OFF.']) }}
       {{ macros.m_tab_content_end() }}
 
       {{ macros.m_tab_content_start('auto', false) }}
@@ -249,6 +256,7 @@ function _notifyTest(kind){
 $('body').on('click', '#notifyTestCookieBtn',       function(e){ e.preventDefault(); _notifyTest('cookie'); });
 $('body').on('click', '#notifyTestDownloadBtn',     function(e){ e.preventDefault(); _notifyTest('download'); });
 $('body').on('click', '#notifyTestDownloadNovelBtn',function(e){ e.preventDefault(); _notifyTest('download_novel'); });
+$('body').on('click', '#notifyTestCompletedBtn',    function(e){ e.preventDefault(); _notifyTest('completed'); });
 
 /* ===== 작품 목록 미리보기 / 정규화 / DB 매칭 ===== */
 function _parseTokens(raw){
