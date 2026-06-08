@@ -142,6 +142,14 @@ function syncCheckAll(){
   $('#m_check_all').prop('checked', boxes.length > 0 && boxes.length === checked.length);
 }
 
+$('body').on('keydown', '#manual_url', function(e){
+  // 입력창에서 Enter → 분석 버튼 클릭과 동일 (한글 IME 조합 중 Enter 는 무시)
+  if (e.which === 13 && !(e.originalEvent && e.originalEvent.isComposing)) {
+    e.preventDefault();
+    $('#manualAnalyzeBtn').click();
+  }
+});
+
 $('body').on('click', '#manualAnalyzeBtn', function(e){
   e.preventDefault();
   var url = ($('#manual_url').val() || '').trim();
