@@ -853,13 +853,22 @@ class Worker:
         # 분류: 받지 않은 회차들 → free/owned/rented(직접) vs locked(기다무 ticket 필요)
         free_owned: List = []   # (item, availability)
         locked: List = []
+        skipped_nonepisode = 0
         for x in eps:
             it = x['item']
             pid = it.get('product_id')
             if not pid:
                 continue
+            # slide_type=SD01: 트레일러/PV 비디오. viewer_data 가 -500 으로 거부됨.
+            # 본편이 아니므로 분류에서 제외 (매 실행마다 다운 실패 누적 방지).
+            if it.get('slide_type') == 'SD01':
+                skipped_nonepisode += 1
+                continue
             rec = db.session.query(ModelKakaopageItem).filter_by(product_id=pid).first()
             if rec and rec.status == 'completed':
+                continue
+            # viewer_data 거부 등으로 이전 실행에서 영구 스킵된 회차도 재시도 안 함
+            if rec and rec.status == 'skipped_unsupported':
                 continue
             avail = KakaopageClient.episode_availability(it)
             if avail in ('free', 'owned', 'rented'):
@@ -869,8 +878,8 @@ class Worker:
         ep_key = lambda t: KakaopageClient.episode_no_from_title(t[0].get('title', '')) or 0
         free_owned.sort(key=ep_key)
         locked.sort(key=ep_key)
-        P.logger.info('[%s] 미수신 — 무료/보유 %d개, 잠금 %d개',
-                      title, len(free_owned), len(locked))
+        P.logger.info('[%s] 미수신 — 무료/보유 %d개, 잠금 %d개 (트레일러 등 제외 %d개)',
+                      title, len(free_owned), len(locked), skipped_nonepisode)
 
         downloaded_count = 0
         _auto_set(current_phase='downloading')
@@ -969,11 +978,18 @@ class Worker:
                 all_completed = True
                 missing = 0
                 for x in eps:
-                    pid = (x.get('item') or {}).get('product_id')
+                    it = x.get('item') or {}
+                    pid = it.get('product_id')
                     if not pid:
+                        continue
+                    # 트레일러는 다운로드 불가이므로 완결 판정에서 제외
+                    if it.get('slide_type') == 'SD01':
                         continue
                     rec = (db.session.query(ModelKakaopageItem)
                            .filter_by(product_id=pid).first())
+                    # 트레일러/미지원으로 영구 스킵된 회차도 완결 판정에서 제외
+                    if rec and rec.status == 'skipped_unsupported':
+                        continue
                     if not rec or rec.status != 'completed':
                         all_completed = False
                         missing += 1
@@ -1491,6 +1507,16 @@ class Worker:
         try:
             vd = self.client.viewer_data(series_id, product_id)
         except KakaopageError as e:
+            # api_common_fail(-500) 은 트레일러 등 다운로드 불가 회차에서 발생.
+            # 다시 시도해도 같은 결과이므로 영구 스킵으로 표기 (다음 실행에서 분류 단계 제외).
+            msg = str(e)
+            if 'api_common_fail' in msg:
+                rec.status = 'skipped_unsupported'
+                rec.error_msg = f'viewer_data api_common_fail (trailer/unsupported): {e}'
+                db.session.commit()
+                P.logger.info('[%s] %s viewer_data 거부 — 트레일러/미지원으로 영구 스킵',
+                              series_title, episode_title)
+                return 'skipped'
             rec.status = 'failed'; rec.error_msg = f'viewer_data: {e}'
             db.session.commit(); return 'failed'
         viewer_data = vd.get('viewerData') or {}
