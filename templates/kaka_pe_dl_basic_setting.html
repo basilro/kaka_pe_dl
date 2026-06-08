@@ -6,7 +6,8 @@
                             ['globalImmediatelyExecuteBtn', '즉시 실행'],
                             ['verifyCookiesBtn', '쿠키 검증'],
                             ['syncMetadataBtn', '메타 동기화'],
-                            ['compressAllBtn', '압축 처리']]) }}
+                            ['compressAllBtn', '압축 처리'],
+                            ['pagecountAllBtn', '페이지수 부여']]) }}
   {{ macros.m_row_start('5') }}
   {{ macros.m_row_end() }}
   <nav>
@@ -192,6 +193,22 @@ $('body').on('click', '#compressAllBtn', function(e){
          function(data){
     if(data && data.ret === 'success'){
       $.notify(data.msg || '압축 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+});
+
+$('body').on('click', '#pagecountAllBtn', function(e){
+  e.preventDefault();
+  if (!confirm('기존 압축 파일(.zip/.cbz)의 파일명 끝에 #페이지수 를 붙입니다.\n파일명만 바뀌며(원본 삭제 없음), 이미 #N 이 있으면 건너뜁니다.\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'pagecount_all'},
+         function(data){
+    if(data && data.ret === 'success'){
+      $.notify(data.msg || '페이지수 부여 시작됨', {className: 'success'});
     } else {
       $.notify((data && data.msg) || '실행 실패', {className: 'error'});
     }

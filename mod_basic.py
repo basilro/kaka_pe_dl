@@ -83,6 +83,8 @@ class ModuleBasic(PluginModuleBase):
                 ret = self.do_action_sync_metadata()
             elif command == 'compress_all':
                 ret = self.do_action_compress_all()
+            elif command == 'pagecount_all':
+                ret = self.do_action_pagecount_all()
             # ---- 수동 다운로드 (명령 이름에서 manual_ 접두사 제거 — 라우터 충돌 회피) ----
             elif command == 'manalyze':
                 from . import manual_worker
@@ -292,3 +294,22 @@ class ModuleBasic(PluginModuleBase):
         threading.Thread(target=_bg, daemon=True).start()
         return {'ret': 'success',
                 'msg': '압축 시작됨 — "진행 상황" 메뉴에서 확인'}
+
+    def do_action_pagecount_all(self):
+        """기존 압축 파일에 #페이지수 일괄 부여 (파일명만 변경, 백그라운드)."""
+        import threading
+        from . import worker as auto_worker
+        if auto_worker.get_auto_state().get('status') == 'running':
+            return {'ret': 'fail', 'msg': '이미 다른 작업 실행 중'}
+
+        def _bg():
+            try:
+                with F.app.app_context():
+                    Worker().add_pagecount_all()
+            except Exception as e:
+                P.logger.error('[basic] add_pagecount_all Exception: %s', e)
+                P.logger.error(traceback.format_exc())
+
+        threading.Thread(target=_bg, daemon=True).start()
+        return {'ret': 'success',
+                'msg': '페이지수 부여 시작됨 — "진행 상황" 메뉴에서 확인'}

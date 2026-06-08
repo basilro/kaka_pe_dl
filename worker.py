@@ -32,6 +32,50 @@ def _webtoon_episode_dir(download_root: str, series_title: str,
 
 _IMAGE_EXTS = ('.webp', '.jpg', '.jpeg', '.png', '.gif', '.bmp')
 
+# 회차 아카이브로 인정하는 확장자 — 생성은 .zip 만, 인식은 .cbz 도 인정.
+_ARCHIVE_EXTS = ('.zip', '.cbz')
+
+
+def _strip_pagecount(name: str) -> str:
+    """파일명/경로 끝의 '#<숫자>' 페이지수 표기를 (확장자 앞에서) 제거.
+
+    '0001_제목#25.zip' → '0001_제목.zip'. 제목 중간의 '#'이나 '#비숫자'는 보존
+    (끝의 '#숫자'만 제거). DB save_dir 에는 이 정규화된(=#N 없는) 경로를 저장한다.
+    """
+    root, ext = os.path.splitext(name or '')
+    return re.sub(r'#\d+$', '', root) + ext
+
+
+def _find_archive_by_stem(directory: str, stem: str) -> Optional[str]:
+    """directory 안에서 stem 과 일치하는 회차 아카이브를 찾는다(없으면 None).
+
+    '{stem}.zip' / '{stem}#<숫자>.zip' / 동일 형태의 .cbz 를 인정 — 페이지수 표기와
+    확장자(zip/cbz)는 무시하고 stem 으로 매칭.
+    """
+    if not os.path.isdir(directory):
+        return None
+    try:
+        for fn in sorted(os.listdir(directory)):
+            if not fn.lower().endswith(_ARCHIVE_EXTS):
+                continue
+            base = re.sub(r'#\d+$', '', os.path.splitext(fn)[0])
+            if base == stem:
+                return os.path.join(directory, fn)
+    except OSError:
+        return None
+    return None
+
+
+def _count_archive_images(path: str) -> int:
+    """아카이브(.zip/.cbz) 내부 이미지 멤버 수를 센다 (열기 실패 시 -1)."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return sum(1 for n in zf.namelist()
+                       if not n.endswith('/') and n.lower().endswith(_IMAGE_EXTS))
+    except Exception:
+        return -1
+
 
 def _verify_episode_zip(ep_folder: str, zip_path: str) -> bool:
     """zip 이 원본 회차 폴더의 모든 이미지를 동일 이름·크기로 담고 CRC 무결한지 검증.
@@ -93,24 +137,12 @@ def _zip_episode_folder(ep_folder: str) -> Optional[str]:
     # 아니므로 거부 — cover.jpg(.jpg)를 이미지로 오인해 작품 폴더를 통째로 zip+rmtree
     # 하던 사고 방지.
     lower = {e.lower() for e in entries}
-    if 'info.xml' in lower or 'cover.jpg' in lower or any(e.endswith('.zip') for e in lower):
+    if ('info.xml' in lower or 'cover.jpg' in lower
+            or any(e.endswith(_ARCHIVE_EXTS) for e in lower)):
         P.logger.warning(
-            '압축 거부 (작품 폴더 신호 info.xml/cover.jpg/zip 존재 → 회차 폴더 아님): %s',
+            '압축 거부 (작품 폴더 신호 info.xml/cover.jpg/아카이브 존재 → 회차 폴더 아님): %s',
             ep_folder)
         return None
-
-    parent = os.path.dirname(ep_folder)
-    name = os.path.basename(ep_folder)
-    zip_path = os.path.join(parent, name + '.zip')
-    if os.path.exists(zip_path):
-        # 기존 zip 이 원본과 일치하면 재사용, 손상/불일치면 지우고 재생성.
-        if _verify_episode_zip(ep_folder, zip_path):
-            return zip_path
-        try:
-            os.remove(zip_path)
-        except Exception as e:
-            P.logger.warning('기존 손상 zip 삭제 실패 — 건너뜀 %s: %s', zip_path, e)
-            return None
 
     files_to_zip = []
     for f in sorted(entries):
@@ -119,6 +151,22 @@ def _zip_episode_folder(ep_folder: str) -> Optional[str]:
             files_to_zip.append((f, path))
     if not files_to_zip:
         return None
+
+    parent = os.path.dirname(ep_folder)
+    name = os.path.basename(ep_folder)
+    # 파일명 끝에 페이지수 #N (이미지 수) — 뷰어 표시용. DB 에는 #N 빼고 저장.
+    zip_path = os.path.join(parent, f'{name}#{len(files_to_zip)}.zip')
+
+    # 멱등: 같은 회차 아카이브(stem 일치, #N·확장자 무관)가 이미 있으면 검증 후 재사용.
+    existing = _find_archive_by_stem(parent, name)
+    if existing:
+        if _verify_episode_zip(ep_folder, existing):
+            return existing
+        try:
+            os.remove(existing)
+        except Exception as e:
+            P.logger.warning('기존 손상 아카이브 삭제 실패 — 건너뜀 %s: %s', existing, e)
+            return None
 
     tmp_zip = zip_path + '.tmp'
     try:
@@ -1145,7 +1193,7 @@ class Worker:
                 # 작품 폴더 신호(info.xml/cover.jpg/이미 압축된 .zip 회차)면 회차
                 # 폴더가 아니므로 제외 — cover.jpg 때문에 통째로 압축되던 버그 방지.
                 if ('info.xml' in lower or 'cover.jpg' in lower
-                        or any(f.endswith('.zip') for f in lower)):
+                        or any(f.endswith(_ARCHIVE_EXTS) for f in lower)):
                     continue
                 # 이미지 파일이 1개 이상 있어야 함 (소설 .txt 폴더 자동 제외)
                 if not any(f.endswith(_IMAGE_EXTS) for f in lower):
@@ -1215,6 +1263,71 @@ class Worker:
                 'verified': verified, 'verify_failed': verify_failed,
                 'skipped': skipped, 'failed': failed}
 
+    @_exclusive
+    def add_pagecount_all(self) -> dict:
+        """기존 압축 파일에 페이지수 #N 을 일괄 부여 (파일명만 변경, 멱등).
+
+        download_path 아래 회차 아카이브(.zip/.cbz) 중 파일명 끝에 '#N' 이 없는
+        것을 찾아, 내부 이미지 멤버 수 N 을 세고 '{stem}#{N}{ext}' 로 rename.
+        이미 #N 있으면 skip; 이미지 0/열기 실패/대상 이름 존재 시 skip.
+        DB(save_dir)는 항상 #N 없는 경로 정책이므로 손대지 않는다. 원본 삭제 없음.
+        """
+        P.logger.info('[basic] add_pagecount_all BEGIN root=%s', self.download_root)
+        _auto_reset()
+        _auto_set(status='running', started_at=datetime.now().isoformat(),
+                  message='페이지수 부여 시작')
+        if not self.download_root or not os.path.isdir(self.download_root):
+            _auto_set(status='error', finished_at=datetime.now().isoformat(),
+                      message='download_path 미설정/없음')
+            return {'ret': 'fail', 'reason': 'no_download_path'}
+
+        targets: List[str] = []
+        for root, dirs, files in os.walk(self.download_root):
+            for fn in files:
+                if not fn.lower().endswith(_ARCHIVE_EXTS):
+                    continue
+                if re.search(r'#\d+$', os.path.splitext(fn)[0]):
+                    continue  # 이미 #N
+                targets.append(os.path.join(root, fn))
+
+        _auto_set(titles_total=len(targets))
+        renamed = 0
+        skipped = 0
+        failed = 0
+        for idx, path in enumerate(targets, start=1):
+            rel = os.path.relpath(path, self.download_root)
+            _auto_set(current_title=rel, current_phase='pagecount',
+                      titles_done=idx - 1)
+            try:
+                n = _count_archive_images(path)
+                if n <= 0:
+                    skipped += 1
+                else:
+                    d = os.path.dirname(path)
+                    stem, ext = os.path.splitext(os.path.basename(path))
+                    new_path = os.path.join(d, f'{stem}#{n}{ext}')
+                    if os.path.exists(new_path):
+                        P.logger.warning('페이지수 부여 skip (대상 이름 존재): %s',
+                                         new_path)
+                        skipped += 1
+                    else:
+                        os.replace(path, new_path)
+                        renamed += 1
+                        P.logger.info('[pagecount] %s → #%d', rel, n)
+            except Exception as e:
+                P.logger.warning('페이지수 부여 실패 %s: %s', rel, e)
+                failed += 1
+            _auto_set(titles_done=idx)
+
+        _auto_set(status='done', finished_at=datetime.now().isoformat(),
+                  current_title='', current_phase='',
+                  message=(f'페이지수 부여 완료 — 부여 {renamed}개, 스킵 {skipped}개, '
+                           f'실패 {failed}개'))
+        P.logger.info('[basic] add_pagecount_all END renamed=%d skipped=%d failed=%d',
+                      renamed, skipped, failed)
+        return {'ret': 'success', 'renamed': renamed,
+                'skipped': skipped, 'failed': failed}
+
     # ---- one episode ----
     def _recognize_existing_zip(self, series_title: str, series_id: int,
                                 ep_item: dict) -> bool:
@@ -1230,9 +1343,11 @@ class Worker:
             return False
         ep_no = KakaopageClient.episode_no_from_title(ep_item.get('title', '')) or 0
         episode_title = ep_item.get('title', '')
-        zip_path = _webtoon_episode_dir(self.download_root, series_title,
-                                        ep_no, episode_title) + '.zip'
-        if not os.path.exists(zip_path):
+        ep_dir = _webtoon_episode_dir(self.download_root, series_title,
+                                      ep_no, episode_title)
+        zip_path = _find_archive_by_stem(os.path.dirname(ep_dir),
+                                         os.path.basename(ep_dir))
+        if not zip_path:
             return False
         rec = ModelKakaopageItem()
         rec.series_id = series_id
@@ -1241,7 +1356,7 @@ class Worker:
         rec.episode_no = ep_no
         rec.episode_title = episode_title
         rec.status = 'completed'
-        rec.save_dir = zip_path
+        rec.save_dir = _strip_pagecount(zip_path)
         rec.downloaded_at = datetime.now()
         rec.updated_time = rec.downloaded_at
         db.session.add(rec)
@@ -1498,7 +1613,7 @@ class Worker:
                 and viewer_type != 'TextViewerData'):
             zip_path = compress_episode_folder(save_dir)
             if zip_path:
-                rec.save_dir = zip_path
+                rec.save_dir = _strip_pagecount(zip_path)  # DB 는 #N 없이
                 db.session.commit()
                 P.logger.info('[%s] %s 압축 완료 → %s',
                               series_title, episode_title, zip_path)
