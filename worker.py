@@ -901,7 +901,17 @@ class Worker:
                           title, len(locked))
         elif locked:
             _auto_set(current_phase='check_ticket')
-            tm = self.client.get_ticket_my(series_id)
+            try:
+                tm = self.client.get_ticket_my(series_id)
+            except AuthRequiredError as e:
+                # ticket/my 는 verify(HTML 로그인) 통과해도 -100 떨어지는 경우가
+                # 있음 (카카오 BFF 가 더 강한 인증 요구). 작품 통째로 fail 시키지
+                # 말고 잠금 회차만 스킵 — 무료/보유는 이미 위에서 처리됨.
+                P.logger.warning(
+                    '[%s] ticket/my 인증 거부 (-100) — 잠금 회차 %d개 스킵, '
+                    '쿠키 재주입 권장: %s', title, len(locked), e)
+                tm = {}
+                locked = []
             wf = tm.get('waitfree') or {}
             my = tm.get('my') or {}
 
