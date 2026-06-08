@@ -494,9 +494,10 @@ def _download_episode(cli: KakaopageClient, series_id: int, series_title: str,
             from . import worker as _wkr
             zip_path = _wkr.compress_episode_folder(save_dir)
             if zip_path:
-                rec.save_dir = zip_path
+                clean = _wkr._strip_pagecount(zip_path)  # DB/UI 는 #N 없이
+                rec.save_dir = clean
                 db.session.commit()
-                _ep_update(idx, save_dir=zip_path)
+                _ep_update(idx, save_dir=clean)
                 P.logger.info('[manual] %s 압축 완료 → %s',
                               episode_title, zip_path)
         return 'completed'
