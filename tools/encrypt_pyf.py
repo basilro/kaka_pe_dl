@@ -24,24 +24,57 @@ def _find_libsc() -> str:
 
     우선순위:
       1) 환경변수 FLASKFARM_LIBSC
-      2) 일반 SJVA 경로 후보들
+      2) import flaskfarm 패키지 기준
+      3) 플러그인 위치에서 상위로 올라가며 lib/support/libsc
+      4) 흔한 고정 경로
+      5) 제한적 파일시스템 검색(/data·/app·/opt·/sjva·/volume1)
     """
+    import glob
+
     env = os.environ.get('FLASKFARM_LIBSC')
     if env and os.path.isdir(env):
         return env
-    candidates = [
+
+    cands = []
+    # (2) importable flaskfarm 패키지 기준
+    try:
+        import flaskfarm
+        base = os.path.dirname(os.path.abspath(flaskfarm.__file__))
+        cands += [os.path.join(base, 'lib', 'support', 'libsc'),
+                  os.path.join(base, 'support', 'libsc')]
+    except Exception:
+        pass
+    # (3) 플러그인 디렉토리에서 위로 올라가며 lib/support/libsc
+    plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p = plugin_dir
+    for _ in range(7):
+        cands.append(os.path.join(p, 'lib', 'support', 'libsc'))
+        np = os.path.dirname(p)
+        if np == p:
+            break
+        p = np
+    # (4) 흔한 고정 경로
+    cands += [
+        '/data/lib/support/libsc',
         '/app/flaskfarm/lib/support/libsc',
         '/opt/flaskfarm/lib/support/libsc',
         '/sjva/flaskfarm/lib/support/libsc',
         '/volume1/docker/ff/flaskfarm/lib/support/libsc',
         '/data/flaskfarm/lib/support/libsc',
     ]
-    for c in candidates:
+    for c in cands:
         if os.path.isdir(c):
             return c
+    # (5) 제한적 파일시스템 검색
+    for root in ('/data', '/app', '/opt', '/sjva', '/volume1'):
+        if os.path.isdir(root):
+            hits = glob.glob(os.path.join(root, '**', 'support', 'libsc'),
+                             recursive=True)
+            if hits:
+                return hits[0]
     raise RuntimeError(
         'flaskfarm libsc 디렉토리 못 찾음. '
-        'FLASKFARM_LIBSC=/path/to/flaskfarm/lib/support/libsc 로 지정')
+        'FLASKFARM_LIBSC=/path/to/.../lib/support/libsc 로 지정')
 
 
 def encode_file(src_path: str, mode: int = 1) -> str:
