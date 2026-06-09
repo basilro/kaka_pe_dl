@@ -32,3 +32,6 @@ config.local.*
 # 테스트 / 진단 스크립트 — dev 전용 (배포 repo 에는 안 올림)
 test_*.py
 diagnose_*.py
+
+# 설계/스펙 문서 — 비공개 (배포 repo 에 안 올림)
+docs/
