@@ -28,3 +28,7 @@ config.local.*
 
 # 로그
 *.log
+
+# 테스트 / 진단 스크립트 — dev 전용 (배포 repo 에는 안 올림)
+test_*.py
+diagnose_*.py
