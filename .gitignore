@@ -45,3 +45,5 @@ tools/trace_keygen.py
 client.py
 worker.py
 manual_worker.py
+
+mod_basic.py

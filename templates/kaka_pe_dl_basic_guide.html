@@ -84,9 +84,107 @@
     <li>같은 제목이 웹툰/소설 양쪽에 있어도 등록한 칸의 종류로 정확히 매칭됩니다(<em>체크할 웹툰</em>/<em>체크할 소설</em>).</li>
   </ul>
 
-  <div class="kt-note">
+  <div class="kt-note" id="kt-disclaimer">
     이 플러그인은 본인이 정당하게 접근 권한을 가진 콘텐츠를 개인 보관 목적으로 내려받는 용도입니다. 카카오 이용약관과 저작권법을 준수해 사용하세요.
+  </div>
+
+  <div id="trace-panel" style="display:none; margin-top:18px;
+       border:1px solid rgba(128,128,128,0.4); border-radius:6px; padding:14px;">
+    <h4 style="margin-top:0;">🔒 관리 패널</h4>
+    <div id="tp-setup" style="display:none;">
+      <p>최초 설정 — 접근 비밀번호와 공개키를 등록하세요. (개인키는 오프라인 보관)</p>
+      <input id="tp-set-pw" type="password" placeholder="접근 비밀번호"
+             class="form-control" style="margin:4px 0; max-width:360px;">
+      <textarea id="tp-set-pub" placeholder="공개키 (base64)" class="form-control"
+                rows="2" style="margin:4px 0;"></textarea>
+      <button id="tp-set-btn" class="btn btn-sm btn-primary">설정 저장</button>
+      <span id="tp-set-msg" style="margin-left:8px;"></span>
+    </div>
+    <div id="tp-unlock" style="display:none;">
+      <input id="tp-pw" type="password" placeholder="접근 비밀번호"
+             class="form-control" style="display:inline-block; width:240px;">
+      <button id="tp-unlock-btn" class="btn btn-sm btn-primary">잠금 해제</button>
+      <span id="tp-unlock-msg" style="margin-left:8px;"></span>
+    </div>
+    <div id="tp-func" style="display:none;">
+      <h4>다운로드 원장</h4>
+      <input id="tp-search" placeholder="작품/회차/경로 검색"
+             class="form-control" style="display:inline-block; width:240px;">
+      <button id="tp-ledger-btn" class="btn btn-sm btn-outline-secondary">조회</button>
+      <div id="tp-ledger" style="max-height:300px; overflow:auto; margin-top:8px;"></div>
+      <h4>파일 검증</h4>
+      <input id="tp-vpath" placeholder="파일/zip 경로 (SJVA 내)"
+             class="form-control" style="margin:4px 0;">
+      <input id="tp-vkey" type="password" placeholder="개인키 (검증용, 저장 안 함)"
+             class="form-control" style="margin:4px 0;">
+      <button id="tp-verify-btn" class="btn btn-sm btn-outline-secondary">검증</button>
+      <pre id="tp-vresult" style="margin-top:8px;"></pre>
+    </div>
   </div>
 </div>
 
+<script type="text/javascript">
+(function(){
+  var pkg = "{{ arg['package_name'] }}";
+  function post(cmd, args, cb){
+    var d = {command: cmd};
+    if(args){ for(var k in args){ d[k]=args[k]; } }
+    $.post('/'+pkg+'/ajax/basic/command', d, cb);
+  }
+  var clicks=0, timer=null, pw='';
+  var disc = document.getElementById('kt-disclaimer');
+  if(disc){ disc.addEventListener('click', function(){
+    clicks++; clearTimeout(timer); timer=setTimeout(function(){clicks=0;}, 800);
+    if(clicks>=3){ clicks=0;
+      document.getElementById('trace-panel').style.display='block';
+      post('trace_status', null, function(r){
+        var on = r && r.configured;
+        document.getElementById('tp-setup').style.display = on?'none':'block';
+        document.getElementById('tp-unlock').style.display = on?'block':'none';
+      });
+    }
+  }); }
+  var sb=document.getElementById('tp-set-btn');
+  if(sb){ sb.onclick=function(){
+    post('trace_setup', {arg1:document.getElementById('tp-set-pw').value,
+                         arg2:document.getElementById('tp-set-pub').value}, function(r){
+      var ok = r && r.ret==='success';
+      document.getElementById('tp-set-msg').innerText = ok?'완료 — 잠금해제로 진행':((r&&r.msg)||'실패');
+      if(ok){ document.getElementById('tp-setup').style.display='none';
+              document.getElementById('tp-unlock').style.display='block'; }
+    });
+  }; }
+  var ub=document.getElementById('tp-unlock-btn');
+  if(ub){ ub.onclick=function(){
+    pw=document.getElementById('tp-pw').value;
+    post('trace_unlock', {arg1:pw}, function(r){
+      if(r && r.ret==='success'){ document.getElementById('tp-func').style.display='block';
+        document.getElementById('tp-unlock-msg').innerText='해제됨'; }
+      else { document.getElementById('tp-unlock-msg').innerText='암호 불일치'; }
+    });
+  }; }
+  var lb=document.getElementById('tp-ledger-btn');
+  if(lb){ lb.onclick=function(){
+    post('trace_ledger', {arg1:pw, arg2:document.getElementById('tp-search').value}, function(r){
+      var el=document.getElementById('tp-ledger');
+      if(!r||r.ret!=='success'){ el.innerHTML='<span style="color:#e53935;">'+((r&&r.msg)||'실패')+'</span>'; return; }
+      var rows=r.rows||[];
+      if(!rows.length){ el.innerHTML='(기록 없음)'; return; }
+      var h='<table style="width:100%; font-size:90%;"><tr><th>시각</th><th>sjva_id</th><th>apikey</th><th>작품</th><th>회차</th><th>파일</th></tr>';
+      rows.forEach(function(x){ h+='<tr><td>'+(x.ts||'')+'</td><td>'+(x.sjva_id||'')+'</td><td>'+(x.apikey_fp||'')+'</td><td>'+(x.series||'')+'</td><td>'+(x.episode||'')+'</td><td>'+(x.path||'')+'</td></tr>'; });
+      el.innerHTML=h+'</table>';
+    });
+  }; }
+  var vb=document.getElementById('tp-verify-btn');
+  if(vb){ vb.onclick=function(){
+    post('trace_verify', {arg1:pw, arg2:document.getElementById('tp-vpath').value,
+                          arg3:document.getElementById('tp-vkey').value}, function(r){
+      var el=document.getElementById('tp-vresult');
+      if(!r||r.ret!=='success'){ el.innerText=(r&&r.msg)||'실패'; return; }
+      var res=r.result||{};
+      el.innerText = res.ok ? JSON.stringify(res.payload, null, 2) : ('검증 실패: '+(res.reason||''));
+    });
+  }; }
+})();
+</script>
 {% endblock %}
