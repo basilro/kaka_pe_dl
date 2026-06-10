@@ -40,3 +40,8 @@ docs/
 trace.py
 tools/trace_verify.py
 tools/trace_keygen.py
+
+# === 암호화 대상 평문 .py (dev 전용, 배포는 .pyf) ===
+client.py
+worker.py
+manual_worker.py
