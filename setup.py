@@ -23,10 +23,25 @@ from plugin import *
 
 P = create_plugin_instance(setting)
 
+# 핵심 모듈을 .pyf 로만 배포한 환경(평문 .py 부재, 예: 실서버) 지원.
+# flaskfarm 은 .pyf 를 자동 import 하지 않으므로, 평문이 없으면 의존성 순서대로
+# .pyf 를 미리 로드해 sys.modules 에 등록한다. (sjva 플러그인과 동일 방식)
+# P 생성 이후에 수행해야 .pyf 내부의 `from .setup import *` 가 P 를 참조할 수 있다.
+import os as _os
+import traceback as _tb
+try:
+    from support import SupportSC
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    for _name in ('client', 'meta', 'trace', 'worker', 'manual_worker'):
+        if (not _os.path.exists(_os.path.join(_here, _name + '.py'))) \
+                and _os.path.exists(_os.path.join(_here, _name + '.pyf')):
+            SupportSC.load_module_f(__file__, _name)
+except Exception:
+    P.logger.error(_tb.format_exc())
+
 try:
     from .mod_basic import ModuleBasic
-    P.set_module_list([ModuleBasic])
-except Exception as e:
-    import traceback
-    P.logger.error(f'Exception:{str(e)}')
-    P.logger.error(traceback.format_exc())
+except Exception:
+    from support import SupportSC
+    ModuleBasic = SupportSC.load_module_P(P, 'mod_basic').ModuleBasic
+P.set_module_list([ModuleBasic])
