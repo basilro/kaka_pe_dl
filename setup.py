@@ -28,6 +28,7 @@ P = create_plugin_instance(setting)
 # .pyf 를 미리 로드해 sys.modules 에 등록한다. (sjva 플러그인과 동일 방식)
 # P 생성 이후에 수행해야 .pyf 내부의 `from .setup import *` 가 P 를 참조할 수 있다.
 import os as _os
+import sys as _sys
 import traceback as _tb
 try:
     from support import SupportSC
@@ -35,7 +36,11 @@ try:
     for _name in ('client', 'meta', 'trace', 'worker', 'manual_worker'):
         if (not _os.path.exists(_os.path.join(_here, _name + '.py'))) \
                 and _os.path.exists(_os.path.join(_here, _name + '.pyf')):
-            SupportSC.load_module_f(__file__, _name)
+            # flaskfarm support_sc.load_module 은 sys.modules 에 이름 등록을 하지 않는다.
+            # 직접 등록해야 다른 .pyf 의 상대 import(from .client 등)가 동작한다.
+            _mod = SupportSC.load_module_f(__file__, _name)
+            if _mod is not None:
+                _sys.modules[f'{__package__}.{_name}'] = _mod
 except Exception:
     P.logger.error(_tb.format_exc())
 
@@ -43,5 +48,7 @@ try:
     from .mod_basic import ModuleBasic
 except Exception:
     from support import SupportSC
-    ModuleBasic = SupportSC.load_module_P(P, 'mod_basic').ModuleBasic
+    _mb = SupportSC.load_module_P(P, 'mod_basic')
+    _sys.modules[f'{__package__}.mod_basic'] = _mb
+    ModuleBasic = _mb.ModuleBasic
 P.set_module_list([ModuleBasic])
