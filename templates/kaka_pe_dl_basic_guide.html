@@ -92,11 +92,9 @@
        border:1px solid rgba(128,128,128,0.4); border-radius:6px; padding:14px;">
     <h4 style="margin-top:0;">🔒 관리 패널</h4>
     <div id="tp-setup" style="display:none;">
-      <p>최초 설정 — 접근 비밀번호와 공개키를 등록하세요. (개인키는 오프라인 보관)</p>
+      <p>최초 설정 — 관리 패널 접근 비밀번호를 등록하세요.</p>
       <input id="tp-set-pw" type="password" placeholder="접근 비밀번호"
              class="form-control" style="margin:4px 0; max-width:360px;">
-      <textarea id="tp-set-pub" placeholder="공개키 (base64)" class="form-control"
-                rows="2" style="margin:4px 0;"></textarea>
       <button id="tp-set-btn" class="btn btn-sm btn-primary">설정 저장</button>
       <span id="tp-set-msg" style="margin-left:8px;"></span>
     </div>
@@ -113,12 +111,22 @@
       <button id="tp-ledger-btn" class="btn btn-sm btn-outline-secondary">조회</button>
       <div id="tp-ledger" style="max-height:300px; overflow:auto; margin-top:8px;"></div>
       <h4>파일 검증</h4>
-      <input id="tp-vpath" placeholder="파일/zip 경로 (SJVA 내)"
-             class="form-control" style="margin:4px 0;">
       <input id="tp-vkey" type="password" placeholder="개인키 (검증용, 저장 안 함)"
-             class="form-control" style="margin:4px 0;">
-      <button id="tp-verify-btn" class="btn btn-sm btn-outline-secondary">검증</button>
-      <pre id="tp-vresult" style="margin-top:8px;"></pre>
+             class="form-control" style="margin:6px 0;">
+      <!-- 드래그앤드롭 -->
+      <div id="tp-drop" style="border:2px dashed rgba(128,128,128,0.5); border-radius:6px;
+           padding:20px; text-align:center; margin:8px 0; cursor:pointer;
+           transition:border-color .2s;">
+        <span id="tp-drop-label">파일을 여기에 드래그하거나 클릭해서 선택</span>
+        <input id="tp-file-input" type="file" style="display:none;">
+      </div>
+      <!-- 경로 직접 입력 -->
+      <div style="display:flex; gap:6px; align-items:center; margin:4px 0;">
+        <input id="tp-vpath" placeholder="또는 SJVA 내 파일 경로 직접 입력"
+               class="form-control" style="flex:1;">
+        <button id="tp-verify-btn" class="btn btn-sm btn-outline-secondary">경로로 검증</button>
+      </div>
+      <pre id="tp-vresult" style="margin-top:8px; white-space:pre-wrap; word-break:break-all;"></pre>
     </div>
   </div>
 </div>
@@ -131,6 +139,13 @@
     if(args){ for(var k in args){ d[k]=args[k]; } }
     $.post('/'+pkg+'/ajax/basic/command', d, cb);
   }
+  function showVerifyResult(r){
+    var el = document.getElementById('tp-vresult');
+    if(!r || r.ret!=='success'){ el.innerText = (r&&r.msg)||'실패'; return; }
+    var res = r.result || {};
+    el.innerText = res.ok ? JSON.stringify(res.payload, null, 2) : ('검증 실패: '+(res.reason||''));
+  }
+
   var clicks=0, timer=null, pw='';
   var disc = document.getElementById('kt-disclaimer');
   if(disc){ disc.addEventListener('click', function(){
@@ -144,16 +159,19 @@
       });
     }
   }); }
+
+  // 비밀번호 설정 (공개키 입력 없음)
   var sb=document.getElementById('tp-set-btn');
   if(sb){ sb.onclick=function(){
-    post('trace_setup', {arg1:document.getElementById('tp-set-pw').value,
-                         arg2:document.getElementById('tp-set-pub').value}, function(r){
+    post('trace_setup', {arg1:document.getElementById('tp-set-pw').value}, function(r){
       var ok = r && r.ret==='success';
       document.getElementById('tp-set-msg').innerText = ok?'완료 — 잠금해제로 진행':((r&&r.msg)||'실패');
       if(ok){ document.getElementById('tp-setup').style.display='none';
               document.getElementById('tp-unlock').style.display='block'; }
     });
   }; }
+
+  // 잠금 해제
   var ub=document.getElementById('tp-unlock-btn');
   if(ub){ ub.onclick=function(){
     pw=document.getElementById('tp-pw').value;
@@ -163,6 +181,8 @@
       else { document.getElementById('tp-unlock-msg').innerText='암호 불일치'; }
     });
   }; }
+
+  // 원장 조회
   var lb=document.getElementById('tp-ledger-btn');
   if(lb){ lb.onclick=function(){
     post('trace_ledger', {arg1:pw, arg2:document.getElementById('tp-search').value}, function(r){
@@ -175,16 +195,51 @@
       el.innerHTML=h+'</table>';
     });
   }; }
+
+  // 경로 직접 검증
   var vb=document.getElementById('tp-verify-btn');
   if(vb){ vb.onclick=function(){
     post('trace_verify', {arg1:pw, arg2:document.getElementById('tp-vpath').value,
-                          arg3:document.getElementById('tp-vkey').value}, function(r){
-      var el=document.getElementById('tp-vresult');
-      if(!r||r.ret!=='success'){ el.innerText=(r&&r.msg)||'실패'; return; }
-      var res=r.result||{};
-      el.innerText = res.ok ? JSON.stringify(res.payload, null, 2) : ('검증 실패: '+(res.reason||''));
-    });
+                          arg3:document.getElementById('tp-vkey').value}, showVerifyResult);
   }; }
+
+  // 드래그앤드롭 + 파일 선택 검증
+  var drop=document.getElementById('tp-drop');
+  var fileInput=document.getElementById('tp-file-input');
+  if(drop && fileInput){
+    drop.addEventListener('click', function(){ fileInput.click(); });
+    drop.addEventListener('dragover', function(e){ e.preventDefault();
+      drop.style.borderColor='#4caf50'; });
+    drop.addEventListener('dragleave', function(){
+      drop.style.borderColor='rgba(128,128,128,0.5)'; });
+    drop.addEventListener('drop', function(e){
+      e.preventDefault(); drop.style.borderColor='rgba(128,128,128,0.5)';
+      var files = e.dataTransfer.files;
+      if(files && files.length) uploadVerify(files[0]);
+    });
+    fileInput.addEventListener('change', function(){
+      if(fileInput.files && fileInput.files.length) uploadVerify(fileInput.files[0]);
+    });
+  }
+  function uploadVerify(file){
+    var el=document.getElementById('tp-vresult');
+    var label=document.getElementById('tp-drop-label');
+    label.innerText = '검증 중: ' + file.name + ' ...';
+    el.innerText = '';
+    var fd = new FormData();
+    fd.append('file', file);
+    fd.append('pw', pw);
+    fd.append('privkey', document.getElementById('tp-vkey').value);
+    $.ajax({ url:'/'+pkg+'/ajax/basic/trace_upload_verify',
+             type:'POST', data:fd, processData:false, contentType:false,
+             success:function(r){
+               label.innerText = '파일을 여기에 드래그하거나 클릭해서 선택';
+               showVerifyResult(r);
+             },
+             error:function(){ label.innerText='파일을 여기에 드래그하거나 클릭해서 선택';
+               el.innerText='업로드 실패'; }
+           });
+  }
 })();
 </script>
 {% endblock %}
