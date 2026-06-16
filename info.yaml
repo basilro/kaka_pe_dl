@@ -1,6 +1,6 @@
-title: "kaka_pe_dl"
-version: "1.0.54"
-package_name: "kaka_pe_dl"
-developer: "basilro"
-description: "카카오페이지 기다무 자동 다운로드"
-home: "https://github.com/basilro/kaka-pe-dl"
+description: 카카오페이지 기다무 자동 다운로드
+developer: basilro
+home: https://github.com/basilro/kaka-pe-dl
+package_name: kaka_pe_dl
+title: kaka_pe_dl
+version: 1.0.55

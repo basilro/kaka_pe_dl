@@ -112,8 +112,12 @@ function applyState(st){
   bar.innerText = pct + '%';
   if (st.status === 'running') bar.classList.add('progress-bar-animated');
   else bar.classList.remove('progress-bar-animated');
-  // 분석 모드(사용자가 체크 중)면 폴링이 목록을 덮어쓰지 않는다 — 상태/진행 텍스트만 갱신.
-  if (!interactiveMode) {
+  // 분석 후 탭 이동·새로고침 복원: status=idle + episodes 있으면 다시 interactive로.
+  if (!interactiveMode && st.status === 'idle' && (st.episodes || []).length > 0) {
+    interactiveMode = true;
+    renderEpisodes(st.episodes || [], -1, true, null);
+    syncCheckAll();
+  } else if (!interactiveMode) {
     renderEpisodes(st.episodes || [], st.current_index, false, null);
   }
 
