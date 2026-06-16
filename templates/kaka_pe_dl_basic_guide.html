@@ -90,20 +90,7 @@
 
   <div id="trace-panel" style="display:none; margin-top:18px;
        border:1px solid rgba(128,128,128,0.4); border-radius:6px; padding:14px;">
-    <h4 style="margin-top:0;">🔒 관리 패널</h4>
-    <div id="tp-setup" style="display:none;">
-      <p>최초 설정 — 관리 패널 접근 비밀번호를 등록하세요.</p>
-      <input id="tp-set-pw" type="password" placeholder="접근 비밀번호"
-             class="form-control" style="margin:4px 0; max-width:360px;">
-      <button id="tp-set-btn" class="btn btn-sm btn-primary">설정 저장</button>
-      <span id="tp-set-msg" style="margin-left:8px;"></span>
-    </div>
-    <div id="tp-unlock" style="display:none;">
-      <input id="tp-pw" type="password" placeholder="접근 비밀번호"
-             class="form-control" style="display:inline-block; width:240px;">
-      <button id="tp-unlock-btn" class="btn btn-sm btn-primary">잠금 해제</button>
-      <span id="tp-unlock-msg" style="margin-left:8px;"></span>
-    </div>
+    <h4 style="margin-top:0;">관리 패널</h4>
     <div id="tp-func" style="display:none;">
       <h4>다운로드 원장</h4>
       <input id="tp-search" placeholder="작품/회차/경로 검색"
@@ -152,35 +139,9 @@
     clicks++; clearTimeout(timer); timer=setTimeout(function(){clicks=0;}, 800);
     if(clicks>=3){ clicks=0;
       document.getElementById('trace-panel').style.display='block';
-      post('trace_status', null, function(r){
-        var on = r && r.configured;
-        document.getElementById('tp-setup').style.display = on?'none':'block';
-        document.getElementById('tp-unlock').style.display = on?'block':'none';
-      });
+      document.getElementById('tp-func').style.display='block';
     }
   }); }
-
-  // 비밀번호 설정 (공개키 입력 없음)
-  var sb=document.getElementById('tp-set-btn');
-  if(sb){ sb.onclick=function(){
-    post('trace_setup', {arg1:document.getElementById('tp-set-pw').value}, function(r){
-      var ok = r && r.ret==='success';
-      document.getElementById('tp-set-msg').innerText = ok?'완료 — 잠금해제로 진행':((r&&r.msg)||'실패');
-      if(ok){ document.getElementById('tp-setup').style.display='none';
-              document.getElementById('tp-unlock').style.display='block'; }
-    });
-  }; }
-
-  // 잠금 해제
-  var ub=document.getElementById('tp-unlock-btn');
-  if(ub){ ub.onclick=function(){
-    pw=document.getElementById('tp-pw').value;
-    post('trace_unlock', {arg1:pw}, function(r){
-      if(r && r.ret==='success'){ document.getElementById('tp-func').style.display='block';
-        document.getElementById('tp-unlock-msg').innerText='해제됨'; }
-      else { document.getElementById('tp-unlock-msg').innerText='암호 불일치'; }
-    });
-  }; }
 
   // 원장 조회
   var lb=document.getElementById('tp-ledger-btn');
