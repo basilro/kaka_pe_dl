@@ -91,27 +91,41 @@
   <div id="trace-panel" style="display:none; margin-top:18px;
        border:1px solid rgba(128,128,128,0.4); border-radius:6px; padding:14px;">
     <h4 style="margin-top:0;">관리 패널</h4>
+    <!-- 잠금 해제 -->
+    <div id="tp-lock">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input id="tp-pw" type="password" placeholder="관리 암호"
+               class="form-control" style="width:220px;">
+        <button id="tp-unlock-btn" class="btn btn-sm btn-outline-primary">잠금 해제</button>
+      </div>
+      <div id="tp-lock-msg" style="color:#e53935; margin-top:4px; font-size:90%;"></div>
+    </div>
     <div id="tp-func" style="display:none;">
       <h4>다운로드 원장</h4>
-      <input id="tp-search" placeholder="작품/회차/경로 검색"
-             class="form-control" style="display:inline-block; width:240px;">
-      <button id="tp-ledger-btn" class="btn btn-sm btn-outline-secondary">조회</button>
-      <div id="tp-ledger" style="max-height:300px; overflow:auto; margin-top:8px;"></div>
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+        <input id="tp-search" placeholder="작품/회차/경로 검색"
+               class="form-control" style="flex:1;">
+        <button id="tp-ledger-btn" class="btn btn-sm btn-outline-secondary">조회</button>
+      </div>
+      <div id="tp-ledger" style="max-height:300px; overflow:auto; margin-top:4px;"></div>
       <h4>파일 검증</h4>
       <input id="tp-vkey" type="password" placeholder="개인키 (검증용, 저장 안 함)"
              class="form-control" style="margin:6px 0;">
-      <!-- 드래그앤드롭 -->
-      <div id="tp-drop" style="border:2px dashed rgba(128,128,128,0.5); border-radius:6px;
-           padding:20px; text-align:center; margin:8px 0; cursor:pointer;
-           transition:border-color .2s;">
-        <span id="tp-drop-label">파일을 여기에 드래그하거나 클릭해서 선택</span>
-        <input id="tp-file-input" type="file" style="display:none;">
+      <!-- 폴더 브라우저 -->
+      <div style="margin:8px 0;">
+        <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+          <span style="font-size:90%; opacity:.7;" id="tp-browse-path"></span>
+          <button id="tp-browse-up" class="btn btn-sm btn-outline-secondary" style="display:none;">↑ 상위</button>
+          <button id="tp-browse-root" class="btn btn-sm btn-outline-secondary">다운로드 폴더 열기</button>
+        </div>
+        <div id="tp-browse-list" style="border:1px solid rgba(128,128,128,0.3); border-radius:4px;
+             max-height:200px; overflow:auto; font-size:90%; display:none;"></div>
       </div>
-      <!-- 경로 직접 입력 -->
+      <!-- 선택된 경로 + 검증 -->
       <div style="display:flex; gap:6px; align-items:center; margin:4px 0;">
-        <input id="tp-vpath" placeholder="또는 SJVA 내 파일 경로 직접 입력"
+        <input id="tp-vpath" placeholder="파일 경로 (브라우저에서 선택 또는 직접 입력)"
                class="form-control" style="flex:1;">
-        <button id="tp-verify-btn" class="btn btn-sm btn-outline-secondary">경로로 검증</button>
+        <button id="tp-verify-btn" class="btn btn-sm btn-outline-secondary">검증</button>
       </div>
       <pre id="tp-vresult" style="margin-top:8px; white-space:pre-wrap; word-break:break-all;"></pre>
     </div>
@@ -139,9 +153,24 @@
     clicks++; clearTimeout(timer); timer=setTimeout(function(){clicks=0;}, 800);
     if(clicks>=3){ clicks=0;
       document.getElementById('trace-panel').style.display='block';
-      document.getElementById('tp-func').style.display='block';
     }
   }); }
+
+  // 잠금 해제
+  var unlockBtn = document.getElementById('tp-unlock-btn');
+  var pwInput = document.getElementById('tp-pw');
+  if(unlockBtn){ unlockBtn.onclick = function(){
+    post('trace_unlock', {arg1: pwInput.value}, function(r){
+      if(r && r.ret==='success'){
+        pw = pwInput.value;
+        document.getElementById('tp-lock').style.display='none';
+        document.getElementById('tp-func').style.display='block';
+      } else {
+        document.getElementById('tp-lock-msg').innerText = (r&&r.msg)||'암호 불일치';
+      }
+    });
+  }; }
+  if(pwInput){ pwInput.addEventListener('keydown', function(e){ if(e.key==='Enter') unlockBtn.click(); }); }
 
   // 원장 조회
   var lb=document.getElementById('tp-ledger-btn');
@@ -151,56 +180,48 @@
       if(!r||r.ret!=='success'){ el.innerHTML='<span style="color:#e53935;">'+((r&&r.msg)||'실패')+'</span>'; return; }
       var rows=r.rows||[];
       if(!rows.length){ el.innerHTML='(기록 없음)'; return; }
-      var h='<table style="width:100%; font-size:90%;"><tr><th>시각</th><th>sjva_id</th><th>apikey</th><th>작품</th><th>회차</th><th>파일</th></tr>';
-      rows.forEach(function(x){ h+='<tr><td>'+(x.ts||'')+'</td><td>'+(x.sjva_id||'')+'</td><td>'+(x.apikey_fp||'')+'</td><td>'+(x.series||'')+'</td><td>'+(x.episode||'')+'</td><td>'+(x.path||'')+'</td></tr>'; });
+      var h='<table style="width:100%; font-size:90%;"><tr><th>시각</th><th>sjva_id</th><th>작품</th><th>회차</th><th>파일</th></tr>';
+      rows.forEach(function(x){ h+='<tr><td>'+(x.ts||'')+'</td><td>'+(x.sjva_id||'')+'</td><td>'+(x.series||'')+'</td><td>'+(x.episode||'')+'</td><td>'+(x.path||'')+'</td></tr>'; });
       el.innerHTML=h+'</table>';
     });
   }; }
 
-  // 경로 직접 검증
+  // 폴더 브라우저
+  var browseRoot = document.getElementById('tp-browse-root');
+  var browseUp   = document.getElementById('tp-browse-up');
+  var browseList = document.getElementById('tp-browse-list');
+  var browsePath = document.getElementById('tp-browse-path');
+  function loadBrowse(path){
+    post('trace_browse', {arg2: path||''}, function(r){
+      if(!r||r.ret!=='success'){ browseList.innerHTML='<div style="padding:6px; color:#e53935;">'+(r&&r.msg||'실패')+'</div>'; return; }
+      browseList.style.display='block';
+      browsePath.innerText = r.path || '';
+      browseUp.style.display = r.parent ? '' : 'none';
+      browseUp.onclick = function(){ loadBrowse(r.parent); };
+      var h='';
+      (r.entries||[]).forEach(function(e){
+        var icon = e.is_dir ? '📁 ' : '📄 ';
+        var style = e.is_dir ? 'cursor:pointer; padding:3px 8px; color:inherit;'
+                              : 'cursor:pointer; padding:3px 8px; color:inherit; background:rgba(76,175,80,0.08);';
+        h+='<div style="'+style+'" data-path="'+e.path+'" data-dir="'+(e.is_dir?'1':'0')+'">'+icon+e.name+'</div>';
+      });
+      browseList.innerHTML = h || '<div style="padding:6px; opacity:.6;">(비어있음)</div>';
+      browseList.querySelectorAll('div[data-path]').forEach(function(el){
+        el.addEventListener('click', function(){
+          if(el.dataset.dir==='1'){ loadBrowse(el.dataset.path); }
+          else { document.getElementById('tp-vpath').value=el.dataset.path; browseList.style.display='none'; }
+        });
+      });
+    });
+  }
+  if(browseRoot){ browseRoot.onclick = function(){ loadBrowse(''); }; }
+
+  // 경로 검증
   var vb=document.getElementById('tp-verify-btn');
   if(vb){ vb.onclick=function(){
     post('trace_verify', {arg1:pw, arg2:document.getElementById('tp-vpath').value,
                           arg3:document.getElementById('tp-vkey').value}, showVerifyResult);
   }; }
-
-  // 드래그앤드롭 + 파일 선택 검증
-  var drop=document.getElementById('tp-drop');
-  var fileInput=document.getElementById('tp-file-input');
-  if(drop && fileInput){
-    drop.addEventListener('click', function(){ fileInput.click(); });
-    drop.addEventListener('dragover', function(e){ e.preventDefault();
-      drop.style.borderColor='#4caf50'; });
-    drop.addEventListener('dragleave', function(){
-      drop.style.borderColor='rgba(128,128,128,0.5)'; });
-    drop.addEventListener('drop', function(e){
-      e.preventDefault(); drop.style.borderColor='rgba(128,128,128,0.5)';
-      var files = e.dataTransfer.files;
-      if(files && files.length) uploadVerify(files[0]);
-    });
-    fileInput.addEventListener('change', function(){
-      if(fileInput.files && fileInput.files.length) uploadVerify(fileInput.files[0]);
-    });
-  }
-  function uploadVerify(file){
-    var el=document.getElementById('tp-vresult');
-    var label=document.getElementById('tp-drop-label');
-    label.innerText = '검증 중: ' + file.name + ' ...';
-    el.innerText = '';
-    var fd = new FormData();
-    fd.append('file', file);
-    fd.append('pw', pw);
-    fd.append('privkey', document.getElementById('tp-vkey').value);
-    $.ajax({ url:'/'+pkg+'/ajax/basic/trace_upload_verify',
-             type:'POST', data:fd, processData:false, contentType:false,
-             success:function(r){
-               label.innerText = '파일을 여기에 드래그하거나 클릭해서 선택';
-               showVerifyResult(r);
-             },
-             error:function(){ label.innerText='파일을 여기에 드래그하거나 클릭해서 선택';
-               el.innerText='업로드 실패'; }
-           });
-  }
 })();
 </script>
 {% endblock %}
