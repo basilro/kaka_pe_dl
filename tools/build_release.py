@@ -24,7 +24,7 @@ ROOT = os.path.dirname(TOOLS_DIR)
 sys.path.insert(0, TOOLS_DIR)
 
 # 암호화 대상(핵심 로직). 존재하는 것만 자동 선택.
-CORE = ['client.py', 'worker.py', 'manual_worker.py', 'meta.py']
+CORE = ['client.py', 'worker.py', 'manual_worker.py', 'meta.py', 'trace.py', 'mod_basic.py']
 PILOT = ['client.py']
 
 GITIGNORE_MARK = '# === 암호화 대상 평문 .py (dev 전용, 배포는 .pyf) ==='
