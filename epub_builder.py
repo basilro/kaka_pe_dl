@@ -140,8 +140,59 @@ def _chapter_xhtml(ch_title: str, paras: List[str], series_title: str = '') -> s
     )
 
 
-def _cover_xhtml(title: str) -> str:
+def _jpeg_size(path: str) -> Optional[Tuple[int, int]]:
+    """JPEG 파일의 (width, height) 를 stdlib 만으로 파싱. 실패 시 None."""
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+        if not data.startswith(b'\xff\xd8'):
+            return None
+        i = 2
+        n = len(data)
+        # SOF0/1/2/3/5/6/7/9/A/B/D/E/F 마커에서 높이·너비 추출
+        sof = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+               0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+        while i + 9 < n:
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in sof:
+                h = (data[i + 5] << 8) + data[i + 6]
+                w = (data[i + 7] << 8) + data[i + 8]
+                if w > 0 and h > 0:
+                    return w, h
+                return None
+            if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            seg_len = (data[i + 2] << 8) + data[i + 3]
+            if seg_len < 2:
+                return None
+            i += 2 + seg_len
+        return None
+    except Exception:
+        return None
+
+
+def _cover_xhtml(title: str, size: Optional[Tuple[int, int]]) -> str:
     esc = html.escape(title)
+    if size:
+        w, h = size
+        # SVG viewBox + preserveAspectRatio 로 한 페이지에 정확히 맞춤 (오버플로 빈페이지 방지)
+        img = (
+            '<svg xmlns="http://www.w3.org/2000/svg"'
+            ' xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1"'
+            ' width="100%" height="100%"'
+            f' viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet">\n'
+            f'  <image width="{w}" height="{h}"'
+            ' xlink:href="../Images/cover.jpg"/>\n'
+            '</svg>'
+        )
+    else:
+        # 크기를 못 읽으면 height 캡으로라도 오버플로 방지
+        img = ('<img alt="" style="max-width:100%;max-height:100%;"'
+               ' src="../Images/cover.jpg"/>')
     return (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"\n'
@@ -150,11 +201,12 @@ def _cover_xhtml(title: str) -> str:
         '<head>\n'
         '  <link href="../Styles/stylesheet.css" rel="stylesheet" type="text/css"/>\n'
         f'  <title>{esc}</title>\n'
+        '  <style type="text/css">\n'
+        '    html,body{margin:0;padding:0;height:100%;text-align:center;}\n'
+        '  </style>\n'
         '</head>\n'
         '<body>\n'
-        '<div style="text-align:center">'
-        '<img alt="" style="width:100%" src="../Images/cover.jpg"/>'
-        '</div>\n'
+        f'{img}\n'
         '</body>\n'
         '</html>'
     )
@@ -292,7 +344,8 @@ def build_epub(series_dir: str, series_title: str) -> str:
         if has_cover:
             with open(cover_path, 'rb') as f:
                 zf.writestr('OEBPS/Images/cover.jpg', f.read())
-            zf.writestr('OEBPS/Text/cover.xhtml', _cover_xhtml(series_title))
+            zf.writestr('OEBPS/Text/cover.xhtml',
+                        _cover_xhtml(series_title, _jpeg_size(cover_path)))
 
         for i, (ch_title, paras) in enumerate(contents):
             zf.writestr(f'OEBPS/Text/{_ch_file(i)}',
