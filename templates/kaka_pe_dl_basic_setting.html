@@ -112,6 +112,23 @@
                   '※ 트래픽 부담 ↑ — 불안정하면 Off']) }}
 
         {{ macros.setting_buttons([['globalDbDeleteBtn', '이력 초기화']], 'DB 정리') }}
+
+        <hr style="margin:18px 0;"/>
+        <h5 style="margin-bottom:10px;">소설 epub 합본 만들기</h5>
+        <div class="form-group row">
+          <label class="col-form-label col-md-2" style="font-size:0.9em;">시리즈 선택</label>
+          <div class="col-md-10">
+            <div class="d-flex align-items-center flex-wrap" style="gap:6px;">
+              <select id="epub_series_select" class="form-control form-control-sm" style="max-width:380px;">
+                <option value="">-- 로드 중... --</option>
+              </select>
+              <button id="epubBuildBtn" class="btn btn-sm btn-primary">epub 만들기</button>
+              <button id="epubRefreshBtn" class="btn btn-sm btn-outline-secondary">새로고침</button>
+            </div>
+            <div id="epub_result" style="margin-top:6px; font-size:0.88em; min-height:1.2em;"></div>
+            <small class="form-text text-muted">이미 다운받아 놓은 소설 시리즈의 .txt 파일들을 전권 합본 epub으로 만듭니다.</small>
+          </div>
+        </div>
       {{ macros.m_tab_content_end() }}
 
       {{ macros.m_tab_content_start('notify', false) }}
@@ -257,6 +274,57 @@ $('body').on('click', '#notifyTestCookieBtn',       function(e){ e.preventDefaul
 $('body').on('click', '#notifyTestDownloadBtn',     function(e){ e.preventDefault(); _notifyTest('download'); });
 $('body').on('click', '#notifyTestDownloadNovelBtn',function(e){ e.preventDefault(); _notifyTest('download_novel'); });
 $('body').on('click', '#notifyTestCompletedBtn',    function(e){ e.preventDefault(); _notifyTest('completed'); });
+
+/* ===== epub 합본 만들기 ===== */
+function loadEpubList(){
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'epub_list'},
+         function(data){
+    var sel = $('#epub_series_select');
+    sel.empty();
+    if (!data || data.ret !== 'success' || !data.series.length){
+      sel.append('<option value="">-- 소설 시리즈 없음 --</option>');
+    } else {
+      sel.append('<option value="">-- 선택 --</option>');
+      data.series.forEach(function(s){
+        var label = s.folder + ' (' + s.txt_count + '화'
+                  + (s.has_epub ? ', epub있음' : '') + ')';
+        sel.append('<option value="' + s.folder + '">' + label + '</option>');
+      });
+    }
+  });
+}
+
+$('body').on('click', '#epubRefreshBtn', function(e){
+  e.preventDefault(); loadEpubList();
+});
+
+$('body').on('click', '#epubBuildBtn', function(e){
+  e.preventDefault();
+  var folder = $('#epub_series_select').val();
+  if (!folder){ $.notify('시리즈를 선택하세요', {className: 'warn'}); return; }
+  var btn = $(this);
+  btn.prop('disabled', true);
+  $('#epub_result').css('color', '#666').text('epub 생성 중...');
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'epub_build', arg1: folder},
+         function(data){
+    btn.prop('disabled', false);
+    if (data && data.ret === 'success'){
+      $('#epub_result').css('color', '#155724').text(data.msg);
+      $.notify(data.msg, {className: 'success'});
+      loadEpubList();
+    } else {
+      var msg = (data && data.msg) || '실패';
+      $('#epub_result').css('color', '#721c24').text(msg);
+      $.notify(msg, {className: 'error'});
+    }
+  }).fail(function(xhr){
+    btn.prop('disabled', false);
+    var msg = '서버 호출 실패: ' + xhr.status;
+    $('#epub_result').css('color', '#721c24').text(msg);
+  });
+});
 
 /* ===== 작품 목록 미리보기 / 정규화 / DB 매칭 ===== */
 function _parseTokens(raw){
@@ -425,6 +493,9 @@ $(document).ready(function(){
   setTimeout(function(){
     pairs.forEach(function(p){ _doResolve(p.ta, p.pv, p.st, true); });
   }, 300);
+
+  /* epub 시리즈 목록 로드 */
+  loadEpubList();
 });
 </script>
 {% endblock %}

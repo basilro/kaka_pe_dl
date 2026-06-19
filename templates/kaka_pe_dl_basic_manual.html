@@ -42,23 +42,6 @@
   <div id="m_episodes"></div>
 </div>
 
-<hr style="margin-top:30px;"/>
-<div style="margin-bottom:18px;">
-  <h6 style="margin-bottom:10px;"><strong>소설 epub 합본 만들기</strong></h6>
-  <div class="row" style="align-items:center; margin-bottom:6px;">
-    <div class="col-md-5">
-      <select id="epub_series_select" class="form-control form-control-sm">
-        <option value="">-- 로드 중... --</option>
-      </select>
-    </div>
-    <div class="col-md-auto" style="padding-left:0;">
-      <button id="epubBuildBtn" class="btn btn-sm btn-primary" style="margin-right:4px;">epub 만들기</button>
-      <button id="epubRefreshBtn" class="btn btn-sm btn-outline-secondary">새로고침</button>
-    </div>
-  </div>
-  <div id="epub_result" style="font-size:0.88em; min-height:1.4em;"></div>
-</div>
-
 <script type="text/javascript">
 var package_name = "{{ arg['package_name'] }}";
 var pollTimer = null;
@@ -153,59 +136,8 @@ function pollProgress(){
   });
 }
 
-function loadEpubList(){
-  $('#epub_result').text('목록 로드 중...');
-  $.post('/' + package_name + '/ajax/basic/command',
-         {command: 'epub_list'},
-         function(data){
-    var sel = $('#epub_series_select');
-    sel.empty();
-    if (!data || data.ret !== 'success' || !data.series.length){
-      sel.append('<option value="">-- 소설 시리즈 없음 --</option>');
-    } else {
-      sel.append('<option value="">-- 선택 --</option>');
-      data.series.forEach(function(s){
-        var label = s.folder + ' (' + s.txt_count + '화'
-                  + (s.has_epub ? ', epub있음' : '') + ')';
-        sel.append('<option value="' + s.folder + '">' + label + '</option>');
-      });
-    }
-    $('#epub_result').text('');
-  }).fail(function(){ $('#epub_result').text('목록 로드 실패'); });
-}
-
-$('body').on('click', '#epubRefreshBtn', function(){ loadEpubList(); });
-
-$('body').on('click', '#epubBuildBtn', function(){
-  var folder = $('#epub_series_select').val();
-  if (!folder){ $.notify('시리즈를 선택하세요', {className: 'warn'}); return; }
-  $('#epub_result').text('epub 생성 중...');
-  $(this).prop('disabled', true);
-  var btn = $(this);
-  $.post('/' + package_name + '/ajax/basic/command',
-         {command: 'epub_build', arg1: folder},
-         function(data){
-    btn.prop('disabled', false);
-    if (data && data.ret === 'success'){
-      $('#epub_result').css('color', '#155724').text(data.msg);
-      $.notify(data.msg, {className: 'success'});
-      loadEpubList();
-    } else {
-      var msg = (data && data.msg) || '실패';
-      $('#epub_result').css('color', '#721c24').text(msg);
-      $.notify(msg, {className: 'error'});
-    }
-  }).fail(function(xhr){
-    btn.prop('disabled', false);
-    var msg = '서버 호출 실패: ' + xhr.status;
-    $('#epub_result').css('color', '#721c24').text(msg);
-    $.notify(msg, {className: 'error'});
-  });
-});
-
 $(document).ready(function(){
   pollProgress();
-  loadEpubList();
 });
 
 function syncCheckAll(){
