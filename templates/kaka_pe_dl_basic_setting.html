@@ -11,6 +11,19 @@
                             ['epubBuildAllBtn', 'epub 만들기']]) }}
   {{ macros.m_row_start('5') }}
   {{ macros.m_row_end() }}
+  <div class="form-row" style="margin:6px 0 14px 0;">
+    <div class="col-sm-9">
+      <div class="input-group">
+        <input type="text" class="form-control" id="sync_meta_folder"
+               placeholder="임의 폴더 경로 — 비우면 위 '메타 동기화' 버튼과 동일(설정 폴더)">
+        <div class="input-group-append">
+          <button class="btn btn-outline-secondary" type="button" id="selectSyncFolderBtn">폴더 선택</button>
+          <button class="btn btn-outline-primary" type="button" id="syncMetadataFolderBtn">이 폴더 동기화</button>
+        </div>
+      </div>
+      <small class="form-text text-muted">지정한 폴더 안 작품들의 info.xml 을 항상 갱신하고 cover.jpg 는 없으면 생성합니다 (회차 상관없이).</small>
+    </div>
+  </div>
   <nav>
     {{ macros.m_tab_head_start() }}
       {{ macros.m_tab_head('normal', '일반', true) }}
@@ -227,12 +240,38 @@ $('body').on('click', '#pagecountAllBtn', function(e){
 
 $('body').on('click', '#syncMetadataBtn', function(e){
   e.preventDefault();
-  if (!confirm('체크할 작품 폴더에 info.xml / cover.jpg 가 없으면 생성합니다.\n다운로드 폴더에 작품 폴더가 있는 항목만 처리됩니다.\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+  if (!confirm('체크할 작품 폴더의 info.xml 을 항상 갱신하고, cover.jpg 는 없으면 생성합니다.\n다운로드 폴더에 작품 폴더가 있는 항목만 처리됩니다.\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
   $.post('/' + package_name + '/ajax/basic/command',
          {command: 'sync_metadata'},
          function(data){
     if(data && data.ret === 'success'){
       $.notify(data.msg || '메타 동기화 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+});
+
+$('body').on('click', '#selectSyncFolderBtn', function(e){
+  e.preventDefault();
+  var path = $('#sync_meta_folder').val().trim() || $('#download_path').val().trim() || '/';
+  globalSelectLocalFolder('메타 동기화 폴더', path, function(result){
+    $('#sync_meta_folder').val(result);
+  });
+});
+
+$('body').on('click', '#syncMetadataFolderBtn', function(e){
+  e.preventDefault();
+  var folder = $('#sync_meta_folder').val().trim();
+  if (!folder) { $.notify('폴더를 먼저 선택하거나 입력하세요.', {className: 'error'}); return; }
+  if (!confirm('지정한 폴더 안 작품들의 info.xml 을 항상 갱신하고 cover.jpg 는 없으면 생성합니다.\n폴더: ' + folder + '\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'sync_metadata_folder', arg1: folder},
+         function(data){
+    if(data && data.ret === 'success'){
+      $.notify(data.msg || '폴더 메타 동기화 시작됨', {className: 'success'});
     } else {
       $.notify((data && data.msg) || '실행 실패', {className: 'error'});
     }

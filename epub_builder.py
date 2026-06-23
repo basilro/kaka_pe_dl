@@ -1,12 +1,4 @@
-"""소설 .txt 파일들을 하나의 epub2 으로 합치는 빌더 (stdlib only).
-
-reading_info/text2epub.py 의 구현을 참고해 아래 기능을 적용:
-- cover.jpg 표지 삽입
-- CSS (한국 소설 본문 타이포그래피: p.basic-1)
-- BOM / surrogate 제거 + cp949 인코딩 폴백
-- 빈줄 처리 (연속 빈줄비율 조정)
-- info.xml 에서 작가 메타데이터 추출 (stdlib xml.etree)
-"""
+"""소설 .txt 파일들을 하나의 epub2 으로 합치는 빌더 (stdlib only)."""
 import html
 import os
 import re
@@ -37,7 +29,6 @@ p.basic-1 {
 p.basic-1 br { line-height: 1.80em; }
 """
 
-# 빈줄 N개마다 <br/> 1개 삽입 (레퍼런스의 EPUB_빈줄비율과 동일 개념)
 _BLANK_LINE_RATIO = 2
 
 
@@ -53,15 +44,12 @@ def _ch_file(i: int) -> str:
     return f'ch{i:04d}.xhtml'
 
 
-# ---- 텍스트 파일 읽기 (인코딩 강건화) ----
-
 def _read_txt(path: str) -> str:
     """BOM / lone-surrogate 제거 + 다중 인코딩 폴백으로 텍스트 읽기."""
     with open(path, 'rb') as f:
         raw = f.read()
     if raw.startswith(b'\xef\xbb\xbf'):
         raw = raw[3:]
-    # UTF-8 규격 위반 lone surrogate (0xED A0–BF 80–BF) 제거
     cleaned = re.sub(rb'\xed[\xa0-\xbf][\x80-\xbf]', b'', raw)
     for enc in ('utf-8', 'cp949', 'euc-kr', 'utf-16'):
         try:
@@ -70,8 +58,6 @@ def _read_txt(path: str) -> str:
             continue
     return cleaned.decode('utf-8', errors='replace')
 
-
-# ---- info.xml 메타데이터 ----
 
 def _read_info_xml(series_dir: str) -> Dict[str, str]:
     """series_dir/info.xml (ComicInfo) → {title, author}. 실패 시 빈 dict."""
@@ -89,15 +75,8 @@ def _read_info_xml(series_dir: str) -> Dict[str, str]:
         return {}
 
 
-# ---- 텍스트 → HTML 단락 변환 ----
-
 def _text_to_html_paras(text: str) -> List[str]:
-    """텍스트를 <p class="basic-1"> 리스트로 변환.
-
-    - 단락 구분: \n\n (worker.py 저장 포맷과 동일)
-    - 단락 내 개행: <br/>
-    - 빈 단락: _BLANK_LINE_RATIO 개마다 <br/> 1개
-    """
+    """텍스트를 <p class="basic-1"> 리스트로 변환."""
     parts = text.split('\n\n')
     result: List[str] = []
     blank_run = 0
@@ -114,8 +93,6 @@ def _text_to_html_paras(text: str) -> List[str]:
             result.append(f'<p class="basic-1">{"<br/>".join(lines)}</p>')
     return result
 
-
-# ---- epub 구성 요소 빌더 ----
 
 def _chapter_xhtml(ch_title: str, paras: List[str], series_title: str = '') -> str:
     esc = html.escape(ch_title)
@@ -149,7 +126,6 @@ def _jpeg_size(path: str) -> Optional[Tuple[int, int]]:
             return None
         i = 2
         n = len(data)
-        # SOF0/1/2/3/5/6/7/9/A/B/D/E/F 마커에서 높이·너비 추출
         sof = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
                0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
         while i + 9 < n:
@@ -179,7 +155,6 @@ def _cover_xhtml(title: str, size: Optional[Tuple[int, int]]) -> str:
     esc = html.escape(title)
     if size:
         w, h = size
-        # SVG viewBox + preserveAspectRatio 로 한 페이지에 정확히 맞춤 (오버플로 빈페이지 방지)
         img = (
             '<svg xmlns="http://www.w3.org/2000/svg"'
             ' xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1"'
@@ -190,7 +165,6 @@ def _cover_xhtml(title: str, size: Optional[Tuple[int, int]]) -> str:
             '</svg>'
         )
     else:
-        # 크기를 못 읽으면 height 캡으로라도 오버플로 방지
         img = ('<img alt="" style="max-width:100%;max-height:100%;"'
                ' src="../Images/cover.jpg"/>')
     return (
@@ -298,14 +272,8 @@ def _toc_ncx(title: str, chapters: List[Tuple[int, str]]) -> str:
     )
 
 
-# ---- 공개 API ----
-
 def build_epub(series_dir: str, series_title: str) -> str:
-    """series_dir 안의 .txt 파일들을 모아 합본 epub 을 만든다.
-
-    출력: series_dir/{series_title}.epub
-    반환: 생성된 epub 절대 경로
-    """
+    """series_dir 안의 .txt 파일들을 모아 합본 epub 을 만든다."""
     txts = sorted(f for f in os.listdir(series_dir) if f.endswith('.txt'))
     if not txts:
         raise ValueError(f'no .txt files in {series_dir}')
@@ -319,7 +287,6 @@ def build_epub(series_dir: str, series_title: str) -> str:
     chapters: List[Tuple[int, str]] = []
     contents = []
     for i, fname in enumerate(txts):
-        # NNNN_제목.txt → 제목
         ch_title = re.sub(r'^\d+_', '', fname[:-4])
         text = _read_txt(os.path.join(series_dir, fname))
         paras = _text_to_html_paras(text)
@@ -330,7 +297,6 @@ def build_epub(series_dir: str, series_title: str) -> str:
     tmp_path = out_path + '.tmp'
 
     with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # mimetype: 반드시 첫 번째, 비압축
         mi = zipfile.ZipInfo('mimetype')
         mi.compress_type = zipfile.ZIP_STORED
         zf.writestr(mi, _MIMETYPE)

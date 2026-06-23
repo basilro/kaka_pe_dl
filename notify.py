@@ -6,13 +6,7 @@ import requests
 
 def send_webhook(url: str, message: str, username: str = 'kakao_pe_dl',
                  timeout: int = 10) -> bool:
-    """웹훅 URL 로 메시지 발송. URL 비어있으면 False 반환 (no-op).
-
-    Discord / Slack / 기타 자동 분기:
-      - discord.com/api/webhooks → {"content": msg, "username": ...}
-      - hooks.slack.com         → {"text": msg}
-      - 기타                     → {"content": msg, "text": msg}
-    """
+    """웹훅 URL 로 메시지 발송. URL 비어있으면 False 반환 (no-op)."""
     if not url or not message:
         return False
     u = url.strip()
@@ -33,10 +27,7 @@ _KIND_LABEL = {'waitfree': '기다무', 'ticket': '대여권'}
 
 
 def _ticket_tag(items: List[Dict]) -> str:
-    """회차 목록에서 티켓 사용 종류별 카운트 → '[기다무 ×2, 대여권 ×1]' 같은 태그.
-
-    무료(kind='free' 또는 누락)만 있으면 빈 문자열.
-    """
+    """회차 목록에서 티켓 사용 종류별 카운트 → '[기다무 ×2, 대여권 ×1]' 같은 태그."""
     counts: Dict[str, int] = {}
     for it in items:
         k = it.get('kind') or 'free'
@@ -50,16 +41,9 @@ def _ticket_tag(items: List[Dict]) -> str:
 
 
 def build_download_summary(completed_items: List[Dict], is_novel: bool) -> str:
-    """완료된 다운로드 항목 list → 발송용 텍스트.
-
-    completed_items: [{'series_title': str, 'episode_title': str,
-                       'episode_no': int,
-                       'kind': 'free'|'waitfree'|'ticket'}, ...]
-    is_novel: True 면 [카카오페이지 소설], False 면 [카카오페이지 웹툰] 헤더.
-    """
+    """완료된 다운로드 항목 list → 발송용 텍스트."""
     if not completed_items:
         return ''
-    # series_title → list[episode]
     grouped: Dict[str, List[Dict]] = {}
     for it in completed_items:
         s = it.get('series_title') or '(unknown)'
@@ -95,10 +79,7 @@ def build_cookie_expired_message() -> str:
 
 
 def build_completed_removed_message(removed_titles: List[str]) -> str:
-    """완결+전회차완료 감지로 체크 목록에서 자동 제거된 작품 목록.
-
-    removed_titles: ['웹툰: 작품A', '소설: 작품B'] 처럼 종류 라벨이 prefix 된 제목 list.
-    """
+    """완결+전회차완료 감지로 체크 목록에서 자동 제거된 작품 목록."""
     if not removed_titles:
         return ''
     total = len(removed_titles)
