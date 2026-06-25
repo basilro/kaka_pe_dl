@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div>
+  <div class="container-fluid" style="margin-bottom:10px;">
+    <div class="row" style="align-items:center;">
+      <div class="col-md-12" style="margin-bottom:6px;">
+        <div class="btn-group btn-group-sm" role="group" style="margin-right:10px;">
+          <button class="btn btn-primary b-cat" data-cat="webtoon">웹툰</button>
+          <button class="btn btn-outline-primary b-cat" data-cat="novel">소설</button>
+        </div>
+        <button id="b_reload" class="btn btn-sm btn-outline-success">목록 불러오기</button>
+        <button id="b_add" class="btn btn-sm btn-primary" disabled>
+          스케줄 등록 (<span id="b_sel_count">0</span>)
+        </button>
+        <span style="margin-left:10px; color:#666;">
+          <span id="b_total">0</span>편 ·
+          등록됨 <span id="b_reg_count">0</span>편
+        </span>
+        <span id="b_status" style="margin-left:10px; color:#999;"></span>
+      </div>
+    </div>
+    <div class="row" style="align-items:center; margin-top:4px;">
+      <div class="col-md-8" id="b_day_filter" style="margin-bottom:6px;">
+        <button class="btn btn-sm btn-success b-day" data-day="all">전체</button>
+        <button class="btn btn-sm btn-outline-secondary b-day" data-day="월">월</button>
+        <button class="btn btn-sm btn-outline-secondary b-day" data-day="화">화</button>
+        <button class="btn btn-sm btn-outline-secondary b-day" data-day="수">수</button>
+        <button class="btn btn-sm btn-outline-secondary b-day" data-day="목">목</button>
+        <button class="btn btn-sm btn-outline-secondary b-day" data-day="금">금</button>
+        <button class="btn btn-sm btn-outline-secondary b-day" data-day="토">토</button>
+        <button class="btn btn-sm btn-outline-secondary b-day" data-day="일">일</button>
+      </div>
+      <div class="col-md-4" style="margin-bottom:6px; text-align:right;">
+        <input id="b_search" class="form-control form-control-sm d-inline-block" type="text"
+               placeholder="작품/작가 검색" style="width:60%;"/>
+        <label style="margin-left:6px; font-weight:normal; white-space:nowrap;">
+          <input type="checkbox" id="b_hide_registered"/> 등록 숨김
+        </label>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-12">
+        <label style="font-weight:normal;">
+          <input type="checkbox" id="b_check_all"/> 화면에 보이는 항목 전체 선택
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div id="b_grid" class="row" style="margin:0;"></div>
+</div>
+
+<style>
+.b-card { border:1px solid #e3e3e3; border-radius:6px; padding:8px; margin:6px;
+          width:170px; display:flex; flex-direction:column; position:relative; }
+.b-card.b-registered { background:#f3f9f3; border-color:#9ccc9c; }
+.b-card.b-selected { box-shadow:0 0 0 2px #2d8f2d inset; }
+.b-thumb { width:100%; height:96px; object-fit:cover; border-radius:4px; background:#eee; }
+.b-name { font-size:13px; font-weight:bold; margin-top:5px; line-height:1.25;
+          word-break:break-all; }
+.b-author { font-size:11px; color:#777; word-break:break-all; }
+.b-badges { margin-top:4px; }
+.b-badges .badge { margin-right:2px; }
+.b-card .b-check { position:absolute; top:6px; left:6px; transform:scale(1.3); }
+.b-reg-tag { position:absolute; top:6px; right:6px; }
+</style>
+
+<script type="text/javascript">
+var package_name = "{{ arg['package_name'] }}";
+var ALL = [];            // 전체 목록
+var REG = {};            // 등록된 seriesId set
+var curDay = 'all';
+var curCat = 'webtoon';  // webtoon | novel
+
+function dayBadges(days){
+  return (days || []).map(function(d){
+    return '<span class="badge badge-light" style="border:1px solid #ddd;">' + d + '</span>';
+  }).join('');
+}
+
+function cardHtml(it){
+  var reg = !!REG[it.seriesId];
+  var cls = 'b-card' + (reg ? ' b-registered' : '');
+  var tags = '';
+  if (it.waitfree) tags += '<span class="badge badge-warning">기다무</span>';
+  if (it.allfree)  tags += '<span class="badge badge-success">무료</span>';
+  if (!it.onIssue) tags += '<span class="badge badge-dark">완결</span>';
+  if (it.adult)    tags += '<span class="badge badge-danger">19</span>';
+  if (it.subCategory) tags += '<span class="badge badge-light" style="border:1px solid #ddd;">' + it.subCategory + '</span>';
+  var regTag = reg ? '<span class="b-reg-tag badge badge-success">등록됨</span>' : '';
+  return ''
+    + '<div class="' + cls + '" data-id="' + it.seriesId + '">'
+    +   '<input type="checkbox" class="b-check" data-id="' + it.seriesId + '"' + (reg ? ' checked disabled' : '') + '/>'
+    +   regTag
+    +   '<img class="b-thumb" src="' + (it.thumbnailUrl || '') + '" referrerpolicy="no-referrer" '
+    +        'onerror="this.style.visibility=\'hidden\'"/>'
+    +   '<div class="b-name">' + (it.title || '-') + '</div>'
+    +   '<div class="b-author">' + (it.author || '') + '</div>'
+    +   '<div class="b-badges">' + dayBadges(it.days) + ' ' + tags + '</div>'
+    + '</div>';
+}
+
+function visible(it){
+  if (curDay !== 'all' && (it.days || []).indexOf(curDay) < 0) return false;
+  if ($('#b_hide_registered').is(':checked') && REG[it.seriesId]) return false;
+  var q = ($('#b_search').val() || '').trim().toLowerCase();
+  if (q){
+    var hay = ((it.title || '') + ' ' + (it.author || '')).toLowerCase();
+    if (hay.indexOf(q) < 0) return false;
+  }
+  return true;
+}
+
+function render(){
+  var list = ALL.filter(visible);
+  var html = '';
+  for (var i = 0; i < list.length; i++) html += cardHtml(list[i]);
+  $('#b_grid').html(html || '<div style="padding:20px; color:#999;">표시할 작품이 없습니다.</div>');
+  $('#b_total').text(ALL.length);
+  $('#b_reg_count').text(Object.keys(REG).length);
+  updateSel();
+}
+
+function updateSel(){
+  var n = $('.b-check:checked:not(:disabled)').length;
+  $('#b_sel_count').text(n);
+  $('#b_add').prop('disabled', n === 0);
+  $('.b-card').removeClass('b-selected');
+  $('.b-check:checked').each(function(){
+    $(this).closest('.b-card').addClass('b-selected');
+  });
+  var boxes = $('.b-check:not(:disabled)');
+  $('#b_check_all').prop('checked', boxes.length > 0 && boxes.filter(':checked').length === boxes.length);
+}
+
+function loadList(){
+  $('#b_status').text((curCat === 'novel' ? '소설' : '웹툰') + ' 불러오는 중... (요일별 수집, 수십 초 걸릴 수 있음)');
+  $('#b_reload').prop('disabled', true);
+  $.post('/' + package_name + '/ajax/basic/command', {command: 'browse_dayofweek', arg1: curCat}, function(data){
+    if (data && data.ret === 'success'){
+      ALL = data.items || [];
+      REG = {};
+      (data.registered || []).forEach(function(t){ REG[t] = true; });
+      $('#b_status').text('갱신됨 (' + ALL.length + '편)');
+      render();
+    } else {
+      $('#b_status').text((data && data.msg) || '실패');
+      $.notify((data && data.msg) || '목록 조회 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $('#b_status').text('서버 오류');
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  }).always(function(){
+    $('#b_reload').prop('disabled', false);
+  });
+}
+
+$(document).ready(function(){ loadList(); });
+
+$('body').on('click', '.b-cat', function(){
+  curCat = $(this).data('cat');
+  $('.b-cat').removeClass('btn-primary').addClass('btn-outline-primary');
+  $(this).removeClass('btn-outline-primary').addClass('btn-primary');
+  ALL = []; REG = {}; render();
+  loadList();
+});
+
+$('body').on('click', '#b_reload', function(e){ e.preventDefault(); loadList(); });
+
+$('body').on('click', '.b-day', function(){
+  curDay = $(this).data('day');
+  $('.b-day').removeClass('btn-success').addClass('btn-outline-secondary');
+  $(this).removeClass('btn-outline-secondary').addClass('btn-success');
+  render();
+});
+
+$('body').on('input', '#b_search', function(){ render(); });
+$('body').on('change', '#b_hide_registered', function(){ render(); });
+$('body').on('change', '.b-check', function(){ updateSel(); });
+
+$('body').on('change', '#b_check_all', function(){
+  $('.b-check:not(:disabled)').prop('checked', this.checked);
+  updateSel();
+});
+
+$('body').on('click', '#b_add', function(e){
+  e.preventDefault();
+  var ids = $('.b-check:checked:not(:disabled)').map(function(){
+    return $(this).data('id');
+  }).get();
+  if (ids.length === 0){ $.notify('등록할 작품을 선택하세요', {className: 'warn'}); return; }
+  if (!confirm(ids.length + '편을 ' + (curCat === 'novel' ? '소설' : '웹툰') + ' 다운로드 목록에 등록할까요?')) return;
+  $('#b_add').prop('disabled', true);
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'schedule_add', arg1: ids.join(','), arg2: curCat}, function(data){
+    if (data && data.ret === 'success'){
+      $.notify(data.msg || '등록됨', {className: 'success'});
+      REG = {};
+      (data.registered || []).forEach(function(t){ REG[t] = true; });
+      render();
+    } else {
+      $.notify((data && data.msg) || '등록 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  }).always(function(){
+    updateSel();
+  });
+});
+</script>
+{% endblock %}
