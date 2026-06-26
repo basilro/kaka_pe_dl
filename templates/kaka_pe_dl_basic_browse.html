@@ -70,8 +70,11 @@
 var package_name = "{{ arg['package_name'] }}";
 var ALL = [];            // 전체 목록
 var REG = {};            // 등록된 seriesId set
+var REGNAME = {};        // 등록된 제목(정규화) set
 var curDay = 'all';
 var curCat = 'webtoon';  // webtoon | novel
+
+function norm(s){ return (s || '').replace(/\s+/g, '').toLowerCase(); }
 
 function dayBadges(days){
   return (days || []).map(function(d){
@@ -80,7 +83,7 @@ function dayBadges(days){
 }
 
 function cardHtml(it){
-  var reg = !!REG[it.seriesId];
+  var reg = !!REG[it.seriesId] || !!REGNAME[norm(it.title)];
   var cls = 'b-card' + (reg ? ' b-registered' : '');
   var tags = '';
   if (it.waitfree) tags += '<span class="badge badge-warning">기다무</span>';
@@ -103,7 +106,7 @@ function cardHtml(it){
 
 function visible(it){
   if (curDay !== 'all' && (it.days || []).indexOf(curDay) < 0) return false;
-  if ($('#b_hide_registered').is(':checked') && REG[it.seriesId]) return false;
+  if ($('#b_hide_registered').is(':checked') && (REG[it.seriesId] || REGNAME[norm(it.title)])) return false;
   var q = ($('#b_search').val() || '').trim().toLowerCase();
   if (q){
     var hay = ((it.title || '') + ' ' + (it.author || '')).toLowerCase();
@@ -118,7 +121,7 @@ function render(){
   for (var i = 0; i < list.length; i++) html += cardHtml(list[i]);
   $('#b_grid').html(html || '<div style="padding:20px; color:#999;">표시할 작품이 없습니다.</div>');
   $('#b_total').text(ALL.length);
-  $('#b_reg_count').text(Object.keys(REG).length);
+  $('#b_reg_count').text(ALL.filter(function(it){ return REG[it.seriesId] || REGNAME[norm(it.title)]; }).length);
   updateSel();
 }
 
@@ -140,8 +143,9 @@ function loadList(){
   $.post('/' + package_name + '/ajax/basic/command', {command: 'browse_dayofweek', arg1: curCat}, function(data){
     if (data && data.ret === 'success'){
       ALL = data.items || [];
-      REG = {};
+      REG = {}; REGNAME = {};
       (data.registered || []).forEach(function(t){ REG[t] = true; });
+      (data.registered_names || []).forEach(function(t){ REGNAME[t] = true; });
       $('#b_status').text('갱신됨 (' + ALL.length + '편)');
       render();
     } else {
@@ -162,7 +166,7 @@ $('body').on('click', '.b-cat', function(){
   curCat = $(this).data('cat');
   $('.b-cat').removeClass('btn-primary').addClass('btn-outline-primary');
   $(this).removeClass('btn-outline-primary').addClass('btn-primary');
-  ALL = []; REG = {}; render();
+  ALL = []; REG = {}; REGNAME = {}; render();
   loadList();
 });
 
@@ -186,18 +190,23 @@ $('body').on('change', '#b_check_all', function(){
 
 $('body').on('click', '#b_add', function(e){
   e.preventDefault();
-  var ids = $('.b-check:checked:not(:disabled)').map(function(){
-    return $(this).data('id');
-  }).get();
+  var ids = [], titles = [];
+  $('.b-check:checked:not(:disabled)').each(function(){
+    var id = $(this).data('id');
+    ids.push(id);
+    var it = ALL.filter(function(x){ return String(x.seriesId) === String(id); })[0];
+    titles.push(it ? (it.title || '') : '');
+  });
   if (ids.length === 0){ $.notify('등록할 작품을 선택하세요', {className: 'warn'}); return; }
   if (!confirm(ids.length + '편을 ' + (curCat === 'novel' ? '소설' : '웹툰') + ' 다운로드 목록에 등록할까요?')) return;
   $('#b_add').prop('disabled', true);
   $.post('/' + package_name + '/ajax/basic/command',
-         {command: 'schedule_add', arg1: ids.join(','), arg2: curCat}, function(data){
+         {command: 'schedule_add', arg1: ids.join(','), arg2: curCat, arg3: titles.join('\n')}, function(data){
     if (data && data.ret === 'success'){
       $.notify(data.msg || '등록됨', {className: 'success'});
-      REG = {};
+      REG = {}; REGNAME = {};
       (data.registered || []).forEach(function(t){ REG[t] = true; });
+      (data.registered_names || []).forEach(function(t){ REGNAME[t] = true; });
       render();
     } else {
       $.notify((data && data.msg) || '등록 실패', {className: 'error'});
