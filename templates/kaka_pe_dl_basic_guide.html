@@ -119,6 +119,14 @@
       <button id="tp-ledger-btn" class="btn btn-sm btn-outline-secondary">조회</button>
     </div>
     <div id="tp-ledger" style="max-height:300px; overflow:auto; margin-top:4px;"></div>
+    <h4>폴더 지정 메타 동기화</h4>
+    <p style="font-size:90%; opacity:.7; margin:0 0 6px;">지정한 폴더 안 작품들의 info.xml 을 항상 갱신하고 cover.jpg 는 없으면 생성합니다. (회차 상관없이)</p>
+    <div style="display:flex; gap:6px; align-items:center; margin:4px 0;">
+      <input id="tp-sync-folder" placeholder="임의 폴더 경로"
+             class="form-control" style="flex:1;">
+      <button id="tp-sync-select" class="btn btn-sm btn-outline-secondary">폴더 선택</button>
+      <button id="tp-sync-run" class="btn btn-sm btn-outline-primary">이 폴더 동기화</button>
+    </div>
   </div>
 </div>
 
@@ -195,6 +203,27 @@
   if(vb){ vb.onclick=function(){
     post('trace_verify', {arg2:document.getElementById('tp-vpath').value,
                           arg3:document.getElementById('tp-vkey').value}, showVerifyResult);
+  }; }
+
+  // 폴더 지정 메타 동기화
+  var syncSel=document.getElementById('tp-sync-select');
+  if(syncSel){ syncSel.onclick=function(e){
+    e.preventDefault();
+    var cur=(document.getElementById('tp-sync-folder').value||'').trim() || '/';
+    globalSelectLocalFolder('메타 동기화 폴더', cur, function(result){
+      document.getElementById('tp-sync-folder').value=result;
+    });
+  }; }
+  var syncRun=document.getElementById('tp-sync-run');
+  if(syncRun){ syncRun.onclick=function(e){
+    e.preventDefault();
+    var path=(document.getElementById('tp-sync-folder').value||'').trim();
+    if(!path){ $.notify('폴더를 먼저 선택하거나 입력하세요.', {className:'error'}); return; }
+    if(!confirm('지정한 폴더 안 작품들의 info.xml 을 항상 갱신하고 cover.jpg 는 없으면 생성합니다.\n폴더: '+path+'\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+    post('sync_metadata_folder', {arg1: path}, function(data){
+      if(data && data.ret==='success'){ $.notify(data.msg||'폴더 메타 동기화 시작됨', {className:'success'}); }
+      else { $.notify((data&&data.msg)||'실행 실패', {className:'error'}); }
+    });
   }; }
 })();
 </script>
