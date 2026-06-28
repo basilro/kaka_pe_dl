@@ -30,6 +30,9 @@
         <button class="btn btn-sm btn-outline-secondary b-day" data-day="금">금</button>
         <button class="btn btn-sm btn-outline-secondary b-day" data-day="토">토</button>
         <button class="btn btn-sm btn-outline-secondary b-day" data-day="일">일</button>
+        <button class="btn btn-sm btn-outline-info b-day b-day-novel" data-day="매일" style="display:none;">매일</button>
+        <button class="btn btn-sm btn-outline-info b-day b-day-novel" data-day="완결" style="display:none;">완결</button>
+        <button class="btn btn-sm btn-outline-info b-day b-day-novel" data-day="비정기" style="display:none;">비정기</button>
       </div>
       <div class="col-md-4" style="margin-bottom:6px; text-align:right;">
         <input id="b_search" class="form-control form-control-sm d-inline-block" type="text"
@@ -141,7 +144,7 @@ function updateSel(){
 }
 
 function loadList(){
-  $('#b_status').text((curCat === 'novel' ? '소설' : '웹툰') + ' 불러오는 중... (요일별 수집, 수십 초 걸릴 수 있음)');
+  $('#b_status').text((curCat === 'novel' ? '소설 (요일+랭킹 통합)' : '웹툰') + ' 불러오는 중... (수집에 수십 초 걸릴 수 있음)');
   $('#b_reload').prop('disabled', true);
   $.post('/' + package_name + '/ajax/basic/command', {command: 'browse_dayofweek', arg1: curCat}, function(data){
     if (data && data.ret === 'success'){
@@ -169,6 +172,11 @@ $('body').on('click', '.b-cat', function(){
   curCat = $(this).data('cat');
   $('.b-cat').removeClass('btn-primary').addClass('btn-outline-primary');
   $(this).removeClass('btn-outline-primary').addClass('btn-primary');
+  // 소설 전용 필터(매일/완결/비정기) 토글 + 요일 선택 초기화
+  $('.b-day-novel').toggle(curCat === 'novel');
+  curDay = 'all';
+  $('.b-day').removeClass('btn-success').addClass('btn-outline-secondary');
+  $('.b-day[data-day="all"]').removeClass('btn-outline-secondary').addClass('btn-success');
   ALL = []; REG = {}; REGNAME = {}; render();
   loadList();
 });
