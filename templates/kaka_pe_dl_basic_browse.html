@@ -42,6 +42,18 @@
         </label>
       </div>
     </div>
+    <div class="row b-genre-row" id="b_genre_filter" style="align-items:center; margin-top:2px; display:none;">
+      <div class="col-md-12" style="margin-bottom:6px;">
+        <span style="color:#888; font-size:12px; margin-right:6px;">장르</span>
+        <button class="btn btn-sm btn-success b-genre" data-genre="all">전체</button>
+        <button class="btn btn-sm btn-outline-secondary b-genre" data-genre="판타지">판타지</button>
+        <button class="btn btn-sm btn-outline-secondary b-genre" data-genre="현판">현판</button>
+        <button class="btn btn-sm btn-outline-secondary b-genre" data-genre="로맨스">로맨스</button>
+        <button class="btn btn-sm btn-outline-secondary b-genre" data-genre="로판">로판</button>
+        <button class="btn btn-sm btn-outline-secondary b-genre" data-genre="무협">무협</button>
+        <button class="btn btn-sm btn-outline-secondary b-genre" data-genre="BL">BL</button>
+      </div>
+    </div>
     <div class="row">
       <div class="col-md-12">
         <label style="font-weight:normal;">
@@ -78,6 +90,7 @@ var ALL = [];            // 전체 목록
 var REG = {};            // 등록된 seriesId set
 var REGNAME = {};        // 등록된 제목(정규화) set
 var curDay = 'all';
+var curGenre = 'all';    // 소설 서브장르 필터 (subCategory)
 var curCat = 'webtoon';  // webtoon | novel
 
 function norm(s){ return (s || '').replace(/\s+/g, '').toLowerCase(); }
@@ -111,6 +124,7 @@ function cardHtml(it){
 }
 
 function visible(it){
+  if (curCat === 'novel' && curGenre !== 'all' && (it.subCategory || '') !== curGenre) return false;
   if (curDay !== 'all' && (it.days || []).indexOf(curDay) < 0) return false;
   if ($('#b_hide_registered').is(':checked') && (REG[it.seriesId] || REGNAME[norm(it.title)])) return false;
   var q = ($('#b_search').val() || '').trim().toLowerCase();
@@ -172,11 +186,15 @@ $('body').on('click', '.b-cat', function(){
   curCat = $(this).data('cat');
   $('.b-cat').removeClass('btn-primary').addClass('btn-outline-primary');
   $(this).removeClass('btn-outline-primary').addClass('btn-primary');
-  // 소설 전용 필터(매일/완결/비정기) 토글 + 요일 선택 초기화
+  // 소설 전용 필터(매일/완결/비정기) 토글 + 요일/장르 선택 초기화
   $('.b-day-novel').toggle(curCat === 'novel');
+  $('#b_genre_filter').toggle(curCat === 'novel');
   curDay = 'all';
   $('.b-day').removeClass('btn-success').addClass('btn-outline-secondary');
   $('.b-day[data-day="all"]').removeClass('btn-outline-secondary').addClass('btn-success');
+  curGenre = 'all';
+  $('.b-genre').removeClass('btn-success').addClass('btn-outline-secondary');
+  $('.b-genre[data-genre="all"]').removeClass('btn-outline-secondary').addClass('btn-success');
   ALL = []; REG = {}; REGNAME = {}; render();
   loadList();
 });
@@ -186,6 +204,13 @@ $('body').on('click', '#b_reload', function(e){ e.preventDefault(); loadList(); 
 $('body').on('click', '.b-day', function(){
   curDay = $(this).data('day');
   $('.b-day').removeClass('btn-success').addClass('btn-outline-secondary');
+  $(this).removeClass('btn-outline-secondary').addClass('btn-success');
+  render();
+});
+
+$('body').on('click', '.b-genre', function(){
+  curGenre = String($(this).data('genre'));
+  $('.b-genre').removeClass('btn-success').addClass('btn-outline-secondary');
   $(this).removeClass('btn-outline-secondary').addClass('btn-success');
   render();
 });
