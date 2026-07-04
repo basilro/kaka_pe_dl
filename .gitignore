@@ -36,10 +36,11 @@ diagnose_*.py
 # 설계/스펙 문서 — 비공개 (배포 repo 에 안 올림)
 docs/
 
+# 빌드/개발 스크립트 — dev 전용 (배포 repo 에 안 올림)
+tools/
+
 # 유출 추적 모듈 — 비공개(평문 공개 금지, 배포는 .pyf). 검증 도구는 owner 전용.
 trace.py
-tools/trace_verify.py
-tools/trace_keygen.py
 
 # === 암호화 대상 평문 .py (dev 전용, 배포는 .pyf) ===
 client.py
