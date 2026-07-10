@@ -1,4 +1,9 @@
-"""소설 .txt 파일들을 하나의 epub2 으로 합치는 빌더 (stdlib only)."""
+"""소설 .txt → epub2 빌더 (stdlib only).
+
+두 가지 모드:
+- build_epub(): 시리즈의 모든 .txt 를 하나의 합본 epub 으로.
+- build_epub_per_txt(): .txt 회차마다 개별 epub 하나씩.
+"""
 import html
 import os
 import re
@@ -272,6 +277,41 @@ def _toc_ncx(title: str, chapters: List[Tuple[int, str]]) -> str:
     )
 
 
+def _write_epub(out_path: str, book_title: str, author: str,
+                cover_path: str, has_cover: bool,
+                chapters: List[Tuple[int, str]],
+                contents: List[Tuple[str, List[str]]]) -> str:
+    """준비된 chapters/contents 로 하나의 epub 파일을 실제로 쓴다.
+
+    chapters[k][0] 는 contents[k] 의 챕터 인덱스와 일치해야 한다(0..n-1).
+    """
+    tmp_path = out_path + '.tmp'
+
+    with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        mi = zipfile.ZipInfo('mimetype')
+        mi.compress_type = zipfile.ZIP_STORED
+        zf.writestr(mi, _MIMETYPE)
+
+        zf.writestr('META-INF/container.xml', _CONTAINER_XML)
+        zf.writestr('OEBPS/Styles/stylesheet.css', _STYLESHEET)
+        zf.writestr('OEBPS/content.opf',
+                    _content_opf(book_title, author, chapters, has_cover))
+        zf.writestr('OEBPS/toc.ncx', _toc_ncx(book_title, chapters))
+
+        if has_cover:
+            with open(cover_path, 'rb') as f:
+                zf.writestr('OEBPS/Images/cover.jpg', f.read())
+            zf.writestr('OEBPS/Text/cover.xhtml',
+                        _cover_xhtml(book_title, _jpeg_size(cover_path)))
+
+        for i, (ch_title, paras) in enumerate(contents):
+            zf.writestr(f'OEBPS/Text/{_ch_file(i)}',
+                        _chapter_xhtml(ch_title, paras, book_title))
+
+    os.replace(tmp_path, out_path)
+    return out_path
+
+
 def build_epub(series_dir: str, series_title: str) -> str:
     """series_dir 안의 .txt 파일들을 모아 합본 epub 을 만든다."""
     txts = sorted(f for f in os.listdir(series_dir) if f.endswith('.txt'))
@@ -285,7 +325,7 @@ def build_epub(series_dir: str, series_title: str) -> str:
     has_cover = os.path.isfile(cover_path)
 
     chapters: List[Tuple[int, str]] = []
-    contents = []
+    contents: List[Tuple[str, List[str]]] = []
     for i, fname in enumerate(txts):
         ch_title = re.sub(r'^\d+_', '', fname[:-4])
         text = _read_txt(os.path.join(series_dir, fname))
@@ -294,28 +334,35 @@ def build_epub(series_dir: str, series_title: str) -> str:
         contents.append((ch_title, paras))
 
     out_path = os.path.join(series_dir, series_title + '.epub')
-    tmp_path = out_path + '.tmp'
+    return _write_epub(out_path, series_title, author,
+                       cover_path, has_cover, chapters, contents)
 
-    with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        mi = zipfile.ZipInfo('mimetype')
-        mi.compress_type = zipfile.ZIP_STORED
-        zf.writestr(mi, _MIMETYPE)
 
-        zf.writestr('META-INF/container.xml', _CONTAINER_XML)
-        zf.writestr('OEBPS/Styles/stylesheet.css', _STYLESHEET)
-        zf.writestr('OEBPS/content.opf',
-                    _content_opf(series_title, author, chapters, has_cover))
-        zf.writestr('OEBPS/toc.ncx', _toc_ncx(series_title, chapters))
+def build_epub_per_txt(series_dir: str, series_title: str) -> List[str]:
+    """series_dir 안의 .txt 파일 각각을 개별 epub 으로 만든다.
 
-        if has_cover:
-            with open(cover_path, 'rb') as f:
-                zf.writestr('OEBPS/Images/cover.jpg', f.read())
-            zf.writestr('OEBPS/Text/cover.xhtml',
-                        _cover_xhtml(series_title, _jpeg_size(cover_path)))
+    파일명은 원본 .txt 와 동일(확장자만 .epub), 책 제목은 회차 제목.
+    생성된 epub 경로 리스트를 반환한다.
+    """
+    txts = sorted(f for f in os.listdir(series_dir) if f.endswith('.txt'))
+    if not txts:
+        raise ValueError(f'no .txt files in {series_dir}')
 
-        for i, (ch_title, paras) in enumerate(contents):
-            zf.writestr(f'OEBPS/Text/{_ch_file(i)}',
-                        _chapter_xhtml(ch_title, paras, series_title))
+    meta = _read_info_xml(series_dir)
+    author = meta.get('author') or ''
 
-    os.replace(tmp_path, out_path)
-    return out_path
+    cover_path = os.path.join(series_dir, 'cover.jpg')
+    has_cover = os.path.isfile(cover_path)
+
+    out_paths: List[str] = []
+    for fname in txts:
+        ch_title = re.sub(r'^\d+_', '', fname[:-4])
+        text = _read_txt(os.path.join(series_dir, fname))
+        paras = _text_to_html_paras(text)
+        chapters: List[Tuple[int, str]] = [(0, ch_title)]
+        contents: List[Tuple[str, List[str]]] = [(ch_title, paras)]
+        out_path = os.path.join(series_dir, fname[:-4] + '.epub')
+        _write_epub(out_path, ch_title, author,
+                    cover_path, has_cover, chapters, contents)
+        out_paths.append(out_path)
+    return out_paths
