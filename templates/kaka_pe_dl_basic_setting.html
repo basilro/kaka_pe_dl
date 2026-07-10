@@ -8,7 +8,8 @@
                             ['syncMetadataBtn', '메타 동기화'],
                             ['compressAllBtn', '압축 처리'],
                             ['pagecountAllBtn', '페이지수 부여'],
-                            ['epubBuildAllBtn', 'epub 만들기']]) }}
+                            ['epubBuildAllBtn', 'epub 만들기'],
+                            ['novelRenumberAllBtn', '소설 회차번호 재정렬']]) }}
   {{ macros.m_row_start('5') }}
   {{ macros.m_row_end() }}
   <nav>
@@ -272,6 +273,23 @@ $('body').on('click', '#epubBuildAllBtn', function(e){
          function(data){
     if (data && data.ret === 'success'){
       $.notify(data.msg || 'epub 생성 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+});
+
+/* ===== 소설 회차번호 재정렬 (rename + epub 재생성) ===== */
+$('body').on('click', '#novelRenumberAllBtn', function(e){
+  e.preventDefault();
+  if (!confirm('모든 소설 시리즈의 .txt 파일명 앞 회차번호(NNNN_)를 제목 기준으로 다시 매겨 rename합니다.\n(카카오 소설의 "(N)" 형식을 회차번호로 인식)\n해당 시리즈에 epub이 있으면 현재 설정(합본/개별)대로 다시 만듭니다.\n진행 상황은 로그에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'novel_renumber_all'},
+         function(data){
+    if (data && data.ret === 'success'){
+      $.notify(data.msg || '재정렬 시작됨', {className: 'success'});
     } else {
       $.notify((data && data.msg) || '실행 실패', {className: 'error'});
     }
