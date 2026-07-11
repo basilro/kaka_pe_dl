@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  .kt-info { max-width: 1040px; margin: 10px auto 60px; line-height: 1.55; }
+  .kt-info h4 { margin: 20px 0 8px; padding-bottom: 5px;
+                border-bottom: 1px solid rgba(128,128,128,0.3); font-weight: 700; }
+  .kt-info .card { border: 1px solid rgba(128,128,128,0.3); border-radius: 6px;
+                   padding: 12px 14px; margin: 8px 0 16px; }
+  .kt-info label { font-weight: 600; margin-right: 6px; }
+  .kt-info input[type=text], .kt-info select {
+        background: rgba(128,128,128,0.10); border: 1px solid rgba(128,128,128,0.35);
+        border-radius: 4px; padding: 5px 8px; color: inherit; }
+  .kt-info .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+                  margin: 6px 0; }
+  .kt-info .grow { flex: 1 1 320px; min-width: 220px; }
+  .kt-info button { border: 1px solid rgba(128,128,128,0.4); border-radius: 4px;
+        padding: 5px 12px; background: rgba(128,128,128,0.15); color: inherit;
+        cursor: pointer; font-weight: 600; }
+  .kt-info button.primary { background: rgba(33,150,243,0.25);
+                            border-color: rgba(33,150,243,0.5); }
+  .kt-info button:hover { background: rgba(128,128,128,0.3); }
+  .kt-info table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 92%; }
+  .kt-info th, .kt-info td { border: 1px solid rgba(128,128,128,0.3);
+        padding: 5px 8px; text-align: left; vertical-align: top; }
+  .kt-info th { background: rgba(128,128,128,0.12); white-space: nowrap; }
+  .kt-info .muted { opacity: 0.7; font-size: 90%; }
+  .kt-info pre { background: #2d2d2d; color: #f0f0f0; padding: 10px 12px;
+        border-radius: 5px; overflow: auto; font-size: 86%; max-height: 420px; }
+  .kt-badge { display: inline-block; padding: 1px 7px; border-radius: 10px;
+        font-size: 85%; font-weight: 700; }
+  .kt-ok { background: rgba(76,175,80,0.25); }
+  .kt-no { background: rgba(229,57,53,0.22); }
+  .kt-amb { background: rgba(255,193,7,0.25); }
+  #kt-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+        display: none; z-index: 9999; }
+  #kt-modal .box { max-width: 760px; margin: 5vh auto; background: #1e1e1e;
+        border-radius: 8px; padding: 16px 18px; max-height: 88vh; overflow: auto; }
+</style>
+
+<div class="kt-info">
+  <h3>🗂️ Info — 작품 메타(info.xml) 처리</h3>
+  <p class="muted">각 작품 폴더에 <code>info.xml</code>(ComicInfo) + <code>cover.jpg</code> 를 작성/갱신합니다.
+     info.xml 은 항상 덮어쓰고, cover.jpg 는 없을 때만 생성합니다. 책/소설은 출판사·정가·랭킹도 함께 기록합니다.</p>
+
+  <h4>① info 세팅</h4>
+  <div class="card">
+    <button id="kt-settings-btn">세팅 정보 보기</button>
+    <div id="kt-settings" style="margin-top:8px;"></div>
+  </div>
+
+  <h4>② 처리 실행</h4>
+  <div class="card">
+    <div class="row">
+      <label>폴더</label>
+      <select id="kt-folder-sel" class="grow"></select>
+      <button id="kt-folder-refresh">↻</button>
+      <button id="kt-folder-browse">찾아보기…</button>
+    </div>
+    <div class="row">
+      <input type="text" id="kt-folder-path" class="grow" placeholder="또는 경로 직접입력 (비우면 전체)">
+      <button class="primary" id="kt-scan-btn">스캔 (매칭 확인)</button>
+      <span id="kt-scan-status" class="muted"></span>
+    </div>
+    <div class="muted">스캔은 폴더 안 작품들을 카카오와 대조해 <b>확정 / 애매 / 미매칭</b>으로 분류합니다(쓰기 안 함).</div>
+  </div>
+
+  <div id="kt-scan-out" style="display:none;">
+    <div class="card">
+      <div class="row">
+        <b>확정</b> <span id="kt-conf-n" class="kt-badge kt-ok">0</span>
+        <button class="primary" id="kt-apply-conf">확정분 일괄 작성</button>
+      </div>
+      <div id="kt-conf-list"></div>
+    </div>
+    <div class="card">
+      <div class="row"><b>애매 — 후보 선택 필요</b> <span id="kt-amb-n" class="kt-badge kt-amb">0</span>
+        <button class="primary" id="kt-apply-amb">선택분 작성</button></div>
+      <div id="kt-amb-list"></div>
+    </div>
+    <div class="card">
+      <div class="row"><b>미매칭</b> <span id="kt-nom-n" class="kt-badge kt-no">0</span></div>
+      <div id="kt-nom-list" class="muted"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label>개별 처리</label>
+      <input type="text" id="kt-one-raw" class="grow" placeholder="제목 / URL / 숫자 series_id">
+      <input type="text" id="kt-one-sid" placeholder="series_id(선택)" style="width:130px;">
+      <button class="primary" id="kt-one-btn">info 작성</button>
+    </div>
+  </div>
+
+  <h4>③ 처리된 리스트</h4>
+  <div class="card">
+    <div class="row">
+      <button id="kt-proc-refresh">새로고침</button>
+      <span id="kt-proc-sum" class="muted"></span>
+    </div>
+    <div id="kt-proc-list"></div>
+  </div>
+</div>
+
+<div id="kt-modal"><div class="box">
+  <div class="row" style="justify-content:space-between;">
+    <b id="kt-modal-title">info.xml</b><button id="kt-modal-close">닫기</button>
+  </div>
+  <pre id="kt-modal-body"></pre>
+</div></div>
+
+<script type="text/javascript">
+(function(){
+  var pkg = "{{ arg['package_name'] }}";
+  function post(cmd, args, cb){
+    var d = {command: cmd};
+    if(args){ for(var k in args){ d[k]=args[k]; } }
+    $.post('/'+pkg+'/ajax/basic/command', d, cb);
+  }
+  function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function notify(m, ok){ $.notify(m, {className: ok?'success':'error'}); }
+
+  // ── ① 세팅
+  document.getElementById('kt-settings-btn').onclick = function(){
+    post('info_settings', {}, function(r){
+      if(!r||r.ret!=='success'){ notify('세팅 조회 실패', false); return; }
+      var s=r.settings||{};
+      var h='<table>';
+      h+='<tr><th>다운로드 경로</th><td>'+esc(s.download_path||'(미설정)')+'</td></tr>';
+      h+='<tr><th>쿠키</th><td>'+(s.cookie_set?'설정됨':'<span class="kt-badge kt-no">미설정</span>')+'</td></tr>';
+      h+='<tr><th>프록시</th><td>'+(s.use_proxy?'사용':'미사용')+'</td></tr>';
+      h+='<tr><th>info.xml 필드</th><td>'+esc((s.info_fields||[]).join(', '))+'</td></tr>';
+      h+='<tr><th>책/소설 추가필드</th><td>'+esc((s.book_extra||[]).join(', '))+'</td></tr>';
+      h+='<tr><th>cover</th><td>'+esc(s.cover||'')+'</td></tr>';
+      h+='<tr><th>덮어쓰기</th><td>'+esc(s.overwrite||'')+'</td></tr>';
+      h+='</table>';
+      document.getElementById('kt-settings').innerHTML=h;
+    });
+  };
+
+  // ── 폴더 목록
+  function loadFolders(){
+    post('info_folders', {}, function(r){
+      var sel=document.getElementById('kt-folder-sel');
+      sel.innerHTML='<option value="">(전체 — webtoon+novel)</option>';
+      if(r&&r.ret==='success'){ (r.folders||[]).forEach(function(f){
+        var o=document.createElement('option'); o.value=f; o.textContent=f; sel.appendChild(o); });
+      }
+    });
+  }
+  document.getElementById('kt-folder-refresh').onclick=loadFolders;
+  document.getElementById('kt-folder-sel').onchange=function(){
+    document.getElementById('kt-folder-path').value=this.value;
+  };
+  document.getElementById('kt-folder-browse').onclick=function(e){
+    e.preventDefault();
+    var cur=(document.getElementById('kt-folder-path').value||'').trim()||'/';
+    if(typeof globalSelectLocalFolder==='function'){
+      globalSelectLocalFolder('info 처리 폴더', cur, function(res){
+        document.getElementById('kt-folder-path').value=res; });
+    }
+  };
+
+  // ── ② 스캔
+  var scanTimer=null, lastScan=null;
+  document.getElementById('kt-scan-btn').onclick=function(){
+    var folder=(document.getElementById('kt-folder-path').value||'').trim();
+    document.getElementById('kt-scan-status').textContent='스캔 중…';
+    post('info_scan', {arg1: folder}, function(r){
+      if(!r||r.ret!=='success'){ notify((r&&r.msg)||'스캔 실패', false);
+        document.getElementById('kt-scan-status').textContent=''; return; }
+      if(scanTimer) clearInterval(scanTimer);
+      scanTimer=setInterval(pollScan, 1500);
+    });
+  };
+  function pollScan(){
+    post('info_scan_result', {}, function(r){
+      if(!r||r.ret!=='success') return;
+      var sc=r.scan||{};
+      document.getElementById('kt-scan-status').textContent='상태: '+(sc.status||'');
+      if(sc.status==='running') return;
+      clearInterval(scanTimer); scanTimer=null;
+      if(sc.status==='error'){ notify('스캔 오류: '+(sc.msg||''), false); return; }
+      lastScan=sc.result||{}; renderScan(lastScan);
+    });
+  }
+  function candOptions(c){
+    var o='<option value="">— 선택 —</option>';
+    (c.candidates||[]).forEach(function(x){
+      o+='<option value="'+x.series_id+'">['+esc(x.category)+'] '+esc(x.title)+' ('+x.series_id+')'+(x.exact?' ✔':'')+'</option>';
+    });
+    return o;
+  }
+  function renderScan(res){
+    document.getElementById('kt-scan-out').style.display='block';
+    var conf=res.confident||[], amb=res.ambiguous||[], nom=res.nomatch||[];
+    document.getElementById('kt-conf-n').textContent=conf.length;
+    document.getElementById('kt-amb-n').textContent=amb.length;
+    document.getElementById('kt-nom-n').textContent=nom.length;
+    // 확정
+    var h='<table><tr><th>종류</th><th>폴더명</th><th>매칭 작품</th><th>series_id</th><th>info</th></tr>';
+    conf.forEach(function(c){ h+='<tr><td>'+(c.is_novel?'소설':'웹툰')+'</td><td>'+esc(c.name)+'</td><td>'+esc(c.matched_title)+'</td><td>'+c.series_id+'</td><td>'+(c.has_info?'<span class="kt-badge kt-ok">있음</span>':'-')+'</td></tr>'; });
+    h+='</table>'; document.getElementById('kt-conf-list').innerHTML = conf.length?h:'<span class="muted">없음</span>';
+    // 애매
+    var a='<table><tr><th>폴더명</th><th>후보 선택</th><th>직접입력</th></tr>';
+    amb.forEach(function(c,i){ a+='<tr data-name="'+esc(c.name)+'" data-folder="'+esc(c.folder)+'" data-novel="'+(c.is_novel?1:0)+'">'
+      +'<td>'+esc(c.name)+'</td>'
+      +'<td><select class="kt-amb-sel" data-i="'+i+'">'+candOptions(c)+'</select></td>'
+      +'<td><input type="text" class="kt-amb-sid" placeholder="series_id" style="width:120px;"></td></tr>'; });
+    a+='</table>'; document.getElementById('kt-amb-list').innerHTML = amb.length?a:'<span class="muted">없음</span>';
+    // 미매칭
+    document.getElementById('kt-nom-list').innerHTML = nom.length? nom.map(function(c){return esc(c.name);}).join(', ') : '없음';
+  }
+  document.getElementById('kt-apply-conf').onclick=function(){
+    if(!lastScan||!(lastScan.confident||[]).length){ notify('확정 항목 없음', false); return; }
+    var items=lastScan.confident.map(function(c){ return {name:c.name, folder:c.folder, is_novel:c.is_novel, series_id:c.series_id}; });
+    if(!confirm(items.length+'개 확정 작품의 info 를 작성합니다. 계속?')) return;
+    post('info_apply', {arg1: JSON.stringify(items)}, function(r){
+      notify((r&&r.msg)||'', r&&r.ret==='success'); });
+  };
+  document.getElementById('kt-apply-amb').onclick=function(){
+    var rows=document.querySelectorAll('#kt-amb-list tr[data-name]'); var items=[];
+    rows.forEach(function(tr){
+      var sid=(tr.querySelector('.kt-amb-sid').value||'').trim() || (tr.querySelector('.kt-amb-sel').value||'').trim();
+      if(sid){ items.push({name:tr.dataset.name, folder:tr.dataset.folder,
+                           is_novel: tr.dataset.novel==='1', series_id: sid}); }
+    });
+    if(!items.length){ notify('선택된 항목 없음', false); return; }
+    post('info_apply', {arg1: JSON.stringify(items)}, function(r){
+      notify((r&&r.msg)||'', r&&r.ret==='success'); });
+  };
+
+  // 개별
+  document.getElementById('kt-one-btn').onclick=function(){
+    var raw=(document.getElementById('kt-one-raw').value||'').trim();
+    var sid=(document.getElementById('kt-one-sid').value||'').trim();
+    if(!raw&&!sid){ notify('제목/URL 또는 series_id 입력', false); return; }
+    post('info_process_one', {arg1: raw, arg2: sid}, function(r){
+      notify((r&&r.msg)||'', r&&r.ret==='success'); });
+  };
+
+  // ── ③ 처리된 리스트
+  function loadProcessed(){
+    post('info_processed', {}, function(r){
+      if(!r||r.ret!=='success'){ notify('조회 실패', false); return; }
+      document.getElementById('kt-proc-sum').textContent='총 '+r.total+'개 / info 있음 '+r.done+'개';
+      var h='<table><tr><th>종류</th><th>폴더명</th><th>제목</th><th>작가</th><th>상태</th><th>info</th><th>cover</th><th>갱신</th><th></th></tr>';
+      (r.rows||[]).forEach(function(x){
+        h+='<tr><td>'+esc(x.kind)+'</td><td>'+esc(x.name)+'</td><td>'+esc(x.title)+'</td><td>'+esc(x.writer)+'</td><td>'+esc(x.status)+'</td>'
+          +'<td>'+(x.has_info?'<span class="kt-badge kt-ok">O</span>':'<span class="kt-badge kt-no">X</span>')+'</td>'
+          +'<td>'+(x.has_cover?'O':'-')+'</td><td class="muted">'+esc(x.mtime)+'</td>'
+          +'<td>'+(x.has_info?'<button class="kt-view" data-folder="'+esc(x.folder)+'">보기</button>':'')+'</td></tr>';
+      });
+      h+='</table>'; document.getElementById('kt-proc-list').innerHTML=h;
+      document.querySelectorAll('.kt-view').forEach(function(b){ b.onclick=function(){ viewXml(this.dataset.folder); }; });
+    });
+  }
+  document.getElementById('kt-proc-refresh').onclick=loadProcessed;
+  function viewXml(folder){
+    post('info_get_xml', {arg1: folder}, function(r){
+      if(!r||r.ret!=='success'){ notify((r&&r.msg)||'info.xml 없음', false); return; }
+      document.getElementById('kt-modal-title').textContent=r.path||'info.xml';
+      document.getElementById('kt-modal-body').textContent=r.text||'';
+      document.getElementById('kt-modal').style.display='block';
+    });
+  }
+  document.getElementById('kt-modal-close').onclick=function(){ document.getElementById('kt-modal').style.display='none'; };
+  document.getElementById('kt-modal').onclick=function(e){ if(e.target===this) this.style.display='none'; };
+
+  // init
+  loadFolders();
+  loadProcessed();
+})();
+</script>
+{% endblock %}
