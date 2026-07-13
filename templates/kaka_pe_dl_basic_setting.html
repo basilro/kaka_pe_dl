@@ -9,7 +9,8 @@
                             ['compressAllBtn', '압축 처리'],
                             ['pagecountAllBtn', '페이지수 부여'],
                             ['epubBuildAllBtn', 'epub 만들기'],
-                            ['novelRenumberAllBtn', '소설 회차번호 재정렬']]) }}
+                            ['novelRenumberAllBtn', '소설 회차번호 재정렬'],
+                            ['webtoonRenumberAllBtn', '웹툰 회차번호 재정렬']]) }}
   {{ macros.m_row_start('5') }}
   {{ macros.m_row_end() }}
   <nav>
@@ -287,6 +288,23 @@ $('body').on('click', '#novelRenumberAllBtn', function(e){
   if (!confirm('모든 소설 시리즈의 .txt 파일명 앞 회차번호(NNNN_)를 제목 기준으로 다시 매겨 rename합니다.\n(카카오 소설의 "(N)" 형식을 회차번호로 인식)\n해당 시리즈에 epub이 있으면 현재 설정(합본/개별)대로 다시 만듭니다.\n진행 상황은 로그에서 확인하세요.\n계속하시겠습니까?')) return;
   $.post('/' + package_name + '/ajax/basic/command',
          {command: 'novel_renumber_all'},
+         function(data){
+    if (data && data.ret === 'success'){
+      $.notify(data.msg || '재정렬 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+});
+
+/* ===== 웹툰 회차번호 재정렬 (파일/폴더 rename) ===== */
+$('body').on('click', '#webtoonRenumberAllBtn', function(e){
+  e.preventDefault();
+  if (!confirm('모든 웹툰 시리즈의 회차 파일/폴더명 앞 번호(NNNN_)를 카카오 정본 순서(읽는 순서)로 다시 매겨 rename합니다.\n외전/특별편이 섞여 순서가 꼬인 경우 정리됩니다.\n확장자·#페이지수 표기는 그대로 유지됩니다.\n진행 상황은 로그에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'webtoon_renumber_all'},
          function(data){
     if (data && data.ret === 'success'){
       $.notify(data.msg || '재정렬 시작됨', {className: 'success'});
