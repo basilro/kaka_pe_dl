@@ -54,6 +54,11 @@
             desc=['기다무(자동 충전) 대여권 사용 한도. 보통 1장씩 충전되므로 1.',
                   '※ 일반 보유 대여권은 이 값과 무관하게 잔량 전부 사용됨.']) }}
 
+        {{ macros.setting_input_text('max_per_title', '작품당 1회 실행 최대 신규 회차',
+            value=arg['max_per_title'],
+            desc=['한 작품에서 스케줄 1회 실행 시 새로 받을 회차 수 상한(기본 10).',
+                  '초과분은 다음 실행에서 이어 받음. 0 이하로 두면 무제한.']) }}
+
         {{ macros.setting_checkbox('use_waitfree', '기다무 대여권 사용',
             value=arg['use_waitfree'],
             desc='On: 기다무가 충전된 회차에 기다무 대여권 사용.') }}
