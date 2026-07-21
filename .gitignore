@@ -48,3 +48,7 @@ worker.py
 manual_worker.py
 
 mod_basic.py
+
+# 쿠키 원문 (개인정보 — 절대 커밋 금지)
+cookie.txt
+har/
