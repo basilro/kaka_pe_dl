@@ -8,6 +8,8 @@
                             ['syncMetadataBtn', '메타 동기화'],
                             ['compressAllBtn', '압축 처리'],
                             ['pagecountAllBtn', '페이지수 부여'],
+                            ['cleanupEmptyScanBtn', '빈 회차 검사'],
+                            ['cleanupEmptyRunBtn', '빈 회차 정리'],
                             ['epubBuildAllBtn', 'epub 만들기'],
                             ['novelRenumberAllBtn', '소설 회차번호 재정렬'],
                             ['webtoonRenumberAllBtn', '웹툰 회차번호 재정렬']]) }}
@@ -194,6 +196,38 @@ $('body').on('click', '#pagecountAllBtn', function(e){
          function(data){
     if(data && data.ret === 'success'){
       $.notify(data.msg || '페이지수 부여 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+});
+
+$('body').on('click', '#cleanupEmptyScanBtn', function(e){
+  e.preventDefault();
+  if (!confirm('받은이력엔 완료로 남았지만 실제 zip 이 빈/손상(0바이트 페이지)인 웹툰 회차를 찾습니다.\n검사만 하고 삭제/변경은 하지 않습니다.\n진행 상황·결과는 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'cleanup_empty', arg1: 'scan'},
+         function(data){
+    if(data && data.ret === 'success'){
+      $.notify(data.msg || '검사 시작됨', {className: 'success'});
+    } else {
+      $.notify((data && data.msg) || '실행 실패', {className: 'error'});
+    }
+  }).fail(function(xhr){
+    $.notify('서버 호출 실패: ' + xhr.status, {className: 'error'});
+  });
+});
+
+$('body').on('click', '#cleanupEmptyRunBtn', function(e){
+  e.preventDefault();
+  if (!confirm('빈/손상 웹툰 회차의 zip 을 삭제하고 받은이력을 "재다운 대기"로 되돌립니다.\n다음 자동 실행 때(해당 작품이 체크목록에 있으면) 다시 받습니다.\n먼저 "빈 회차 검사"로 개수를 확인하는 것을 권장합니다.\n진행 상황은 "진행 상황" 메뉴에서 확인하세요.\n계속하시겠습니까?')) return;
+  $.post('/' + package_name + '/ajax/basic/command',
+         {command: 'cleanup_empty', arg1: 'run'},
+         function(data){
+    if(data && data.ret === 'success'){
+      $.notify(data.msg || '정리 시작됨', {className: 'success'});
     } else {
       $.notify((data && data.msg) || '실행 실패', {className: 'error'});
     }
