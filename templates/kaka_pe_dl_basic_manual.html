@@ -11,6 +11,21 @@
             '예) 한 회차만: https://page.kakao.com/content/67479044/viewer/{product_id} (그 회차만 자동 선택)',
             '분석 → 받을 회차 체크 → 선택 다운로드. 보유(무료/소장/대여)·미수신만 선택 가능(잠금/이미받음 제외).']) }}
 
+  <div class="container-fluid" style="margin-top:6px;">
+    <div class="form-check">
+      <input type="checkbox" class="form-check-input" id="m_use_custom_cookie"/>
+      <label class="form-check-label" for="m_use_custom_cookie">
+        <strong>별도 쿠키로 분석·다운로드</strong>
+        <small style="color:#666;">— 체크 시 아래 쿠키(다른 계정)로 이 수동 작업을 처리합니다. 해제 시 설정의 쿠키를 사용합니다.</small>
+      </label>
+    </div>
+    <div id="m_custom_cookie_wrap" style="display:none; margin-top:6px;">
+      <textarea id="m_custom_cookie" class="form-control" rows="3"
+                placeholder='별도 계정의 쿠키 JSON 또는 쿠키 문자열 (설정 페이지 "쿠키" 와 같은 형식)'
+                style="font-family:monospace; font-size:12px;"></textarea>
+    </div>
+  </div>
+
   <div class="container-fluid" style="margin-top:10px;">
     <div class="row" style="padding:6px 0;">
       <div class="col-md-3"><strong>상태:</strong> <span id="m_status">-</span></div>
@@ -154,13 +169,29 @@ $('body').on('keydown', '#manual_url', function(e){
   }
 });
 
+$('body').on('change', '#m_use_custom_cookie', function(){
+  $('#m_custom_cookie_wrap').toggle(this.checked);
+});
+
 $('body').on('click', '#manualAnalyzeBtn', function(e){
   e.preventDefault();
   var url = ($('#manual_url').val() || '').trim();
   if (!url) { $.notify('URL을 입력하세요', {className: 'warn'}); return; }
+  var useCustom = $('#m_use_custom_cookie').is(':checked');
+  var customCookie = ($('#m_custom_cookie').val() || '').trim();
+  if (useCustom && !customCookie) {
+    $.notify('별도 쿠키를 입력하거나 체크를 해제하세요', {className: 'warn'});
+    return;
+  }
+  var payload = {command: 'manalyze', arg1: url, url: url};
+  if (useCustom) {
+    payload.arg3 = '1';
+    payload.arg2 = customCookie;
+    payload.custom_cookie = customCookie;
+  }
   $.notify('분석 중...', {className: 'info'});
   $.post('/' + package_name + '/ajax/basic/command',
-         {command: 'manalyze', arg1: url, url: url},
+         payload,
          function(data){
     if (data && data.ret === 'success'){
       $('#m_series').text(data.series_title || '-');
