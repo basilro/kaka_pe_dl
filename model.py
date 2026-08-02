@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 
 from sqlalchemy import desc, or_
@@ -63,3 +64,70 @@ class ModelKakaopageItem(ModelBase):
         else:
             query = query.order_by(cls.id)
         return query
+
+    # ------------------------------------------------------------------
+    # 이력 조회 최적화 (web_list 오버라이드)
+    #
+    # 프레임워크 기본 web_list 는 요청마다
+    #   (1) query.count()  — 필터 조건에 인덱스가 없으면 전체 스캔
+    #   (2) ModelSetting.set(..._last_list_option)  — 쓰기 트랜잭션 1회
+    # 를 수행한다. 같은 SQLite 파일에 trace 원장이 함께 들어 있어서
+    # 다운로드 중에는 이 두 가지가 디스크/쓰기락 경합에 그대로 걸린다.
+    # → count 는 짧게 캐시하고, 옵션 저장은 값이 바뀔 때만 쓴다.
+    # ------------------------------------------------------------------
+    _count_cache = {}          # sig -> (count, expire_ts)
+    _count_ttl = 30            # 초
+    _last_list_option_cache = None
+
+    @classmethod
+    def _cached_count(cls, query, sig):
+        now = time.time()
+        hit = cls._count_cache.get(sig)
+        if hit and hit[1] > now:
+            return hit[0]
+        count = query.count()
+        if len(cls._count_cache) > 50:
+            cls._count_cache.clear()
+        cls._count_cache[sig] = (count, now + cls._count_ttl)
+        return count
+
+    @classmethod
+    def invalidate_count_cache(cls):
+        cls._count_cache.clear()
+
+    @classmethod
+    def web_list(cls, req):
+        try:
+            ret = {}
+            page = int(req.form.get('page', 1) or 1)
+            page_size = 30
+            search = (req.form.get('keyword') or '').strip()
+            option1 = req.form.get('option1', 'all')
+            option2 = req.form.get('option2', 'all')
+            order = req.form.get('order', 'desc')
+
+            query = cls.make_query(req, order=order, search=search,
+                                   option1=option1, option2=option2)
+            sig = '|'.join([
+                (req.form.get('option') or option1 or 'all').strip(),
+                (req.form.get('search_word') or req.form.get('keyword')
+                 or search or '').strip(),
+                (req.form.get('kind_filter') or 'all').strip(),
+            ])
+            count = cls._cached_count(query, sig)
+            lists = query.limit(page_size).offset((page - 1) * page_size).all()
+            ret['list'] = [item.as_dict() for item in lists]
+            ret['paging'] = cls.get_paging_info(count, page, page_size)
+
+            opt = f'{order}|{page}|{search}|{option1}|{option2}'
+            if opt != cls._last_list_option_cache:
+                cls._last_list_option_cache = opt
+                try:
+                    P.ModelSetting.set(f'{cls.__tablename__}_last_list_option', opt)
+                except Exception:
+                    pass
+            return ret
+        except Exception as e:
+            P.logger.error(f'Exception:{str(e)}')
+            import traceback
+            P.logger.error(traceback.format_exc())
