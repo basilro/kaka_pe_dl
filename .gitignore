@@ -45,6 +45,7 @@ trace.py
 # === 암호화 대상 평문 .py (dev 전용, 배포는 .pyf) ===
 client.py
 worker.py
+gthread.py
 manual_worker.py
 
 mod_basic.py
