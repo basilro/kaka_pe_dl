@@ -30,8 +30,8 @@ import traceback as _tb
 try:
     from support import SupportSC
     _here = _os.path.dirname(_os.path.abspath(__file__))
-    # gthread 는 client/worker 가 import 하므로 반드시 먼저 로드해야 한다.
-    for _name in ('gthread', 'client', 'meta', 'trace', 'worker',
+    # gthread / shutdown 은 client/worker 가 import 하므로 먼저 로드해야 한다.
+    for _name in ('gthread', 'shutdown', 'client', 'meta', 'trace', 'worker',
                   'manual_worker'):
         if (not _os.path.exists(_os.path.join(_here, _name + '.py'))) \
                 and _os.path.exists(_os.path.join(_here, _name + '.pyf')):
