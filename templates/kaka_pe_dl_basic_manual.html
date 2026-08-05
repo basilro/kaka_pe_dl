@@ -197,6 +197,8 @@ $('body').on('click', '#manualAnalyzeBtn', function(e){
       $('#m_series').text(data.series_title || '-');
       $('#m_status').text('분석됨');
       var msg = '전체 ' + data.total + '개 / 받기 가능(보유·미수신) ' + data.will_download + '개';
+      if (data.used_custom_cookie) msg += ' [별도 쿠키]';
+      if (data.breakdown) msg += ' — ' + data.breakdown;
       if (data.focus_note) msg += ' — ' + data.focus_note;
       $('#m_message').text(msg);
       // 새 분석 결과 — 분석 모드로 전환하고 직전 다운로드의 폴링을 멈춘다.
