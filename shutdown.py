@@ -118,6 +118,12 @@ def arm_force_exit(grace: float = DEFAULT_GRACE, logger=None) -> bool:
 
     try:
         start_new_thread(_watchdog, ())
+        if logger:
+            try:
+                logger.warning('[shutdown] 강제 종료 백스톱 arm — %.1f초 뒤에도 '
+                               '프로세스가 살아있으면 os._exit', grace)
+            except Exception:
+                pass
         return True
     except Exception:
         with _arm_lock:
