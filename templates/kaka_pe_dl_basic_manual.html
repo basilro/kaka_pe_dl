@@ -210,7 +210,13 @@ $('body').on('click', '#manualAnalyzeBtn', function(e){
       $.notify((data && data.msg) || '분석 실패', {className: 'error'});
     }
   }).fail(function(xhr){
-    $.notify('서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText, {className: 'error'});
+    // 400/500 은 대개 서버가 재시작돼 이 페이지가 낡았을 때 난다
+    // (프레임워크 route 가 form 파싱 실패를 삼키고 None 을 반환 → 500).
+    var m = '서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText;
+    if (xhr.status === 400 || xhr.status === 500 || xhr.status === 0) {
+      m += ' — 플러그인 업데이트/재시작 후라면 이 페이지를 새로고침(Ctrl+F5) 후 다시 시도하세요.';
+    }
+    $.notify(m, {className: 'error'});
   });
 });
 
@@ -232,7 +238,13 @@ $('body').on('click', '#manualDownloadBtn', function(e){
     }
     pollProgress();
   }).fail(function(xhr){
-    $.notify('서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText, {className: 'error'});
+    // 400/500 은 대개 서버가 재시작돼 이 페이지가 낡았을 때 난다
+    // (프레임워크 route 가 form 파싱 실패를 삼키고 None 을 반환 → 500).
+    var m = '서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText;
+    if (xhr.status === 400 || xhr.status === 500 || xhr.status === 0) {
+      m += ' — 플러그인 업데이트/재시작 후라면 이 페이지를 새로고침(Ctrl+F5) 후 다시 시도하세요.';
+    }
+    $.notify(m, {className: 'error'});
   });
 });
 
