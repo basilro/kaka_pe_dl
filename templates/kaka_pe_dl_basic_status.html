@@ -6,7 +6,10 @@
   <div class="container-fluid" style="border:1px solid #ddd; border-radius:4px; padding:10px; margin-bottom:20px;">
     <div class="row" style="padding:4px 0;">
       <div class="col-md-2"><strong>상태:</strong> <span id="a_status">-</span></div>
-      <div class="col-md-10"><span id="a_message" style="color:#666;"></span></div>
+      <div class="col-md-8"><span id="a_message" style="color:#666;"></span></div>
+      <div class="col-md-2 text-right">
+        <button id="a_stop" class="btn btn-sm btn-danger" disabled>중지</button>
+      </div>
     </div>
     <div class="row" style="padding:4px 0;">
       <div class="col-md-2"><strong>시작:</strong></div>
@@ -44,7 +47,10 @@
   <div class="container-fluid" style="border:1px solid #ddd; border-radius:4px; padding:10px;">
     <div class="row" style="padding:4px 0;">
       <div class="col-md-2"><strong>상태:</strong> <span id="m_status">-</span></div>
-      <div class="col-md-10"><span id="m_message" style="color:#666;"></span></div>
+      <div class="col-md-8"><span id="m_message" style="color:#666;"></span></div>
+      <div class="col-md-2 text-right">
+        <button id="m_stop" class="btn btn-sm btn-danger" disabled>중지</button>
+      </div>
     </div>
     <div class="row" style="padding:4px 0;">
       <div class="col-md-2"><strong>작품:</strong></div>
@@ -107,6 +113,11 @@ function applyAuto(a){
   $('#a_pages_total').text(a.current_pages_total || 0);
   var pp = pct(a.current_pages_done, a.current_pages_total);
   $('#a_pgbar').css('width', pp + '%');
+  // 중지 요청을 보낸 뒤에도 현재 회차가 끝날 때까진 running 이므로,
+  // 버튼은 잠그고 라벨로 대기 중임을 알린다.
+  var busy = (a.status === 'running');
+  $('#a_stop').prop('disabled', !busy || !!a.cancel_requested)
+              .text(a.cancel_requested ? '중지 중…' : '중지');
 }
 
 function applyManual(m){
@@ -140,6 +151,26 @@ function applyManual(m){
     $('#m_pages_total').text(0);
     $('#m_pgbar').css('width', '0%');
   }
+  var mbusy = (m.status === 'running');
+  $('#m_stop').prop('disabled', !mbusy || !!m.cancel_requested)
+              .text(m.cancel_requested ? '중지 중…' : '중지');
+}
+
+function sendStop(cmd, label){
+  if(!confirm(label + '을(를) 중지할까요?\n현재 받고 있는 회차까지만 마무리하고 멈춥니다.')) return;
+  $.post('/' + package_name + '/ajax/basic/command', {command: cmd},
+         function(data){
+    $.notify((data && data.msg) || '중지 요청 보냄',
+             {className: (data && data.ret === 'success') ? 'success' : 'warn'});
+    poll();
+  }).fail(function(xhr){
+    // 400/500 은 대개 서버가 재시작돼 이 페이지가 낡았을 때 난다.
+    var m = '서버 호출 실패: ' + xhr.status + ' ' + xhr.statusText;
+    if(xhr.status === 400 || xhr.status === 500 || xhr.status === 0){
+      m += ' — 플러그인 업데이트/재시작 후라면 이 페이지를 새로고침(Ctrl+F5) 후 다시 시도하세요.';
+    }
+    $.notify(m, {className: 'error'});
+  });
 }
 
 function poll(){
@@ -154,6 +185,8 @@ function poll(){
 }
 
 $(document).ready(function(){
+  $('#a_stop').on('click', function(){ sendStop('acancel', '자동 다운로드'); });
+  $('#m_stop').on('click', function(){ sendStop('mcancel', '수동 다운로드'); });
   poll();
   setInterval(poll, 1500);
 });
